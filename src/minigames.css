@@ -1,0 +1,37 @@
+.flash-reading-grid{display:grid;grid-template-columns:1fr .9fr;gap:22px;align-items:start}
+#eventContent.flash-columns{column-count:1;font-size:12px;line-height:1.8}
+.flash-aside{min-width:0}
+.flash-aside .flash-side{grid-template-columns:1fr 1fr;gap:12px;margin-top:0;padding-top:10px}
+.flash-aside .flash-side section+section{border-left:1px solid var(--rule);padding-left:12px}
+.flash-aside .flash-side h3{margin-top:0}
+.flash-aside .flash-side p{font-size:9px}
+.mini-game{border:1px solid #9d9585;border-top:3px solid var(--red);background:#e9e1cf;padding:14px;margin-top:15px}
+.mini-game-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.mini-game-head .article-label{font-size:7px;margin:0}
+.puzzle-status{font:7px "DM Mono",monospace;letter-spacing:.05em;color:var(--muted);text-align:right}
+.mini-game h3{font:700 18px "Playfair Display",serif;margin:8px 0 4px}
+.mini-game-prompt{font-size:9px;line-height:1.5;margin:0 0 10px;color:#5f594d}
+.puzzle-feedback{font:8px/1.5 "DM Mono",monospace;color:var(--red);min-height:12px;margin:9px 0 0}
+.puzzle-entry{display:flex;gap:7px}.puzzle-entry input{min-width:0;flex:1;border:1px solid #958c7a;background:#fbf7ec;padding:9px;font:700 12px "DM Mono",monospace;text-transform:uppercase}
+.puzzle-entry button,.puzzle-actions button{padding:9px 10px;font-size:7px}
+.puzzle-form label{display:block;font:7px "DM Mono",monospace;letter-spacing:.07em;margin:8px 0 5px;color:var(--muted)}
+.wordle-board{display:grid;gap:3px;width:max-content;margin:10px auto}
+.wordle-row{display:grid;grid-template-columns:repeat(5,27px);gap:3px}
+.wordle-tile{height:27px;border:1px solid #aaa293;display:grid;place-items:center;font:700 11px "DM Mono",monospace;background:#f5edda}
+.wordle-tile.correct{background:#55744b;color:white;border-color:#55744b}.wordle-tile.present{background:#b38c42;color:white;border-color:#b38c42}.wordle-tile.absent{background:#77766e;color:white;border-color:#77766e}
+.wordsearch-grid{display:grid;grid-template-columns:repeat(var(--grid-size),minmax(25px,1fr));gap:3px;max-width:270px;margin:10px auto}
+.word-cell{aspect-ratio:1;padding:0;border:1px solid #aaa293;background:#f5edda;color:var(--ink);font:700 10px "DM Mono",monospace;letter-spacing:0}
+.word-cell:hover,.word-cell.chosen{background:#a73832;color:#fff3e1;border-color:#a73832}
+.puzzle-target,.selected-word{font:8px "DM Mono",monospace;letter-spacing:.08em;text-align:center;color:var(--muted)}
+.selected-word b{color:var(--ink);letter-spacing:.15em}
+.puzzle-actions{display:flex;justify-content:center;gap:7px;flex-wrap:wrap}
+.puzzle-actions .ghost{background:transparent;color:var(--ink);border-color:#958c7a}
+.sudoku-board{width:max-content;margin:12px auto;border:2px solid var(--ink)}
+.sudoku-row{display:grid;grid-template-columns:repeat(4,34px)}
+.sudoku-cell{width:34px;height:34px;text-align:center;border:1px solid #b8ad98;background:#fbf7ec;color:var(--ink);font:700 13px "DM Mono",monospace;padding:0;border-radius:0}
+.sudoku-cell:disabled{background:#ddd5c2;color:var(--ink);opacity:1}.sudoku-cell.box-right{border-right:2px solid var(--ink)}.sudoku-cell.box-bottom{border-bottom:2px solid var(--ink)}
+.anagram-card{display:grid;justify-items:center;gap:6px;border-block:1px solid var(--rule);padding:10px;margin:8px 0}
+.anagram-card small{font:7px "DM Mono",monospace;color:var(--muted);letter-spacing:.1em}.anagram-card strong{font:700 23px "DM Mono",monospace;letter-spacing:.18em;color:var(--red)}.anagram-card span{font-size:8px;color:var(--muted)}
+.number-question{text-align:center;font:700 25px "DM Mono",monospace;padding:12px;background:#ddd5c2;margin:8px 0}
+@media(max-width:760px){.flash-reading-grid{grid-template-columns:1fr}.flash-aside .flash-side{grid-template-columns:1fr 1fr}.flash-aside .flash-side section+section{border-left:1px solid var(--rule);border-top:0;padding:0 0 0 12px}}
+@media(max-width:520px){.flash-aside .flash-side{grid-template-columns:1fr}.flash-aside .flash-side section+section{border-left:0;border-top:1px solid var(--rule);padding:10px 0 0}}

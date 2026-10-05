@@ -1,0 +1,32 @@
+@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;700&display=swap");
+
+/* A quieter editorial masthead, blending both newspaper references. */
+.utility-bar{display:flex;justify-content:space-between;gap:12px;padding:8px 4%;background:#292823;color:#f1eadb;font:8px "DM Mono",monospace;letter-spacing:.11em}
+.utility-bar .utility-login{margin:-8px -4% -8px 0;border:0;border-left:1px solid #625f55;background:transparent;color:#f1eadb;padding:8px 4%;font:700 8px "DM Mono",monospace;letter-spacing:.1em;white-space:nowrap}
+.utility-bar .utility-login:hover{background:var(--red)}
+.masthead{padding:16px 4% 13px}
+.mast-meta,.mast-motto{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font:8px "DM Mono",monospace;letter-spacing:.08em}
+.brand-lockup{display:flex;align-items:center;justify-content:center;gap:16px;padding:10px 0 13px}
+.brand-seal{width:40px;height:40px;border:1.5px solid var(--ink);border-radius:50%;display:grid;place-items:center;font:700 13px "Playfair Display",serif}
+.brand-lockup h1{font-size:clamp(38px,7vw,72px);letter-spacing:-.07em}
+.brand-lockup .subtitle{font:8px "DM Mono",monospace;letter-spacing:.11em;margin:8px 0 0}
+.edition-stamp{border:1px solid var(--red);color:var(--red);padding:6px 8px;transform:rotate(4deg);font:7px/1.5 "DM Mono",monospace;letter-spacing:.06em}
+.mast-motto{border-top:1px solid var(--rule);padding-top:9px}
+.breaking-strip{display:flex;align-items:center;gap:14px;overflow:hidden;border-block:3px double var(--ink);background:#e4ddce;padding:0 4%;min-height:33px;font:8px "DM Mono",monospace;letter-spacing:.09em;white-space:nowrap}
+.breaking-strip b{align-self:stretch;display:flex;align-items:center;background:var(--red);color:var(--paper);padding:0 12px;margin-left:-4%;letter-spacing:.12em}
+.front-page{max-width:990px;display:grid;grid-template-columns:1.1fr .8fr;align-items:center;gap:clamp(28px,7vw,82px);padding-top:clamp(45px,8vw,95px);padding-bottom:clamp(45px,8vw,95px);text-align:left}
+.front-copy{border-right:1px solid var(--rule);padding-right:clamp(20px,5vw,55px)}
+.front-copy h2{font-size:clamp(42px,6vw,70px);line-height:.98;letter-spacing:-.055em}
+.front-copy h2 em{font-weight:400}
+.front-note{border-top:1px solid var(--ink);margin-top:28px;padding-top:12px;max-width:420px}
+.front-note p{font-size:12px;line-height:1.7;margin-bottom:0}
+.login-form{border-top:3px double var(--ink);padding-top:18px;margin:0}
+.login-form .eyebrow{font:8px "DM Mono",monospace;line-height:1.6;color:var(--muted)}
+.article-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.industry-card{min-height:0;padding:18px 20px}
+.industry-card h3{font-size:25px}
+.section-heading{margin-bottom:20px}
+.section-heading h2{letter-spacing:-.025em}
+footer{background:#292823;color:var(--paper)}
+@media(max-width:700px){.front-page{grid-template-columns:1fr;gap:25px;padding-top:38px;padding-bottom:38px}.front-copy{border-right:0;border-bottom:1px solid var(--rule);padding:0 0 22px}.front-note{margin-top:18px}.article-grid{grid-template-columns:1fr}.brand-seal,.edition-stamp{display:none}}
+@media(max-width:460px){.utility-bar{font-size:7px}.utility-bar span:last-child{display:none}.utility-bar .utility-login{margin:-8px -4% -8px 0;padding-inline:10px;font-size:7px}.masthead{padding-inline:14px}.mast-meta,.mast-motto{font-size:7px}.mast-meta span:first-child,.mast-motto span:last-child{display:none}.brand-lockup h1{font-size:38px}.breaking-strip{font-size:7px}}

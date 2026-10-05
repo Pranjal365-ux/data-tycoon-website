@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f5edda" />
+  <title>The Daily Data | Data Tycoon</title>
+  <link rel="stylesheet" href="./src/styles.css?v=6" />
+  <link rel="stylesheet" href="./src/editorial.css" />
+  <link rel="stylesheet" href="./src/gameflow.css?v=8" />
+  <link rel="stylesheet" href="./src/minigames.css" />
+  <link rel="stylesheet" href="./src/security.css" />
+</head>
+<body>
+  <div class="paper-frame" id="appRoot">
+    <div class="utility-bar"><span>THE BUSINESS INTELLIGENCE EDITION</span><span>LIVE SIMULATION DESK · VOL. 01</span><button id="returnToLogin" class="utility-login" type="button" data-action="login">RETURN TO LOGIN</button></div>
+    <header class="masthead">
+      <div class="mast-meta"><span>EST. SOMEWHERE BETWEEN YESTERDAY &amp; TOMORROW</span><span>TECHTATVA '26 · MIT MANIPAL</span></div>
+      <div class="brand-lockup"><span class="brand-seal" aria-hidden="true">DT</span><a class="masthead-link" href="#" data-action="home"><h1>DATA TYCOON</h1><p class="subtitle">THE DAILY DATA · BUSINESS &amp; CONSEQUENCES</p></a><span class="edition-stamp">SPECIAL<br><b>EDITION</b></span></div>
+      <div class="mast-motto"><span>EVERY DECISION HAS A MARKET IMPACT.</span><span>READ THE STORY. FIND THE SIGNAL.</span></div>
+    </header>
+    <div class="breaking-strip"><b>NEWSROOM WIRE</b><span>MARKETS MOVE · NEWS SPREADS · DECISIONS COMPOUND</span></div>
+    <main id="page" class="page" tabindex="-1"></main>
+    <footer>THE DAILY DATA · DATA TYCOON · TECHTATVA '26</footer>
+  </div>
+
+  <div id="newsOverlay" class="news-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="eventHeadline">
+    <article class="news-paper">
+      <div class="flash-bar"><span id="flashNumber">LIVE BULLETIN</span><span>BREAKING NEWS</span><span id="countdown" aria-live="off">05:00</span></div>
+      <div class="flash-body"><p class="article-label" id="eventCategory"></p><h2 id="eventHeadline"></h2><p class="event-subheadline" id="eventSubheadline"></p><div class="flash-reading-grid"><div id="eventContent" class="flash-columns"></div><aside class="flash-aside"><div class="flash-side"><section><h3>AFFECTED DESKS</h3><p id="eventDepartments"></p></section><section><h3>FROM THE MARKET DESK</h3><p id="eventEffect"></p></section></div><div id="eventMiniGame"></div></aside></div><div class="screen-locked">SCREEN LOCKED — LIVE EVENT · TIMER CONTINUES DURING THE PUZZLE</div><button class="temporary-bypass" type="button" data-action="bypass-flash">TEMPORARY TEST OPTION · BYPASS TIMER</button></div>
+    </article>
+  </div>
+  <script type="module" src="./src/app.js?v=11"></script>
+</body>
+</html>

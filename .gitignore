@@ -1,0 +1,7 @@
+frontend.zip
+extracted_frontend/
+
+# Local browser/runtime files
+.env
+.env.*
+*.log
