@@ -1,16 +1,22 @@
-import { departments, industries } from "./data/industries.js";
-import { industryDatasets } from "./data/industry-datasets.js";
+﻿import { industries } from "./data/industries.js";
+import { datasetFor, parametersByIndustry, payoutMultipliers } from "./data/round-rules.js";
 import { EVENT_DURATION_MS, events } from "./data/events.js";
-import { miniGamesByEvent } from "./data/minigames.js";
-import { mountMiniGame } from "./minigame-ui.js";
 import { getLeaderboard, getTeamRank, updateTeamInLeaderboard } from "./data/leaderboard.js";
 
 /* ── Keys & State Defaults ───────────────────────────────── */
-const STATE_KEY = "data-tycoon-game-v4";
+const STATE_KEY = "data-tycoon-game-v5";
 const EVENT_KEY_PREFIX = "data-tycoon-active-event-v6";
+const BASE_ROUND_BUDGET = 1_000_000;
+const ROUND_BONUS = 250_000;
 
-// Sub-departments available for direct dollar investments
-const subDepartments = ["Production", "Marketing", "Logistics", "Research", "Human Resources"];
+function roundBonusFor(round = state?.round ?? 1) {
+  return [2, 3].includes(Number(round)) ? ROUND_BONUS : 0;
+}
+
+function roundBudget(round = state?.round ?? 1) {
+  const carryover = state?.companyValue ?? BASE_ROUND_BUDGET;
+  return Math.max(0, Math.floor(Number(carryover) || 0)) + roundBonusFor(round);
+}
 
 const defaults = {
   page: "login",
@@ -18,9 +24,14 @@ const defaults = {
   industry: null,
   pendingIndustry: null,
   round: 1,
-  companyValue: 100000,
-  // Direct dollar amounts invested in each sub-department
-  allocations: { Production: 20000, Marketing: 20000, Logistics: 20000, Research: 20000, "Human Resources": 10000 },
+  scoringVersion: 2,
+  companyValue: BASE_ROUND_BUDGET,
+  moneyRevision: 0,
+  // Direct rupee amounts invested across the selected industry parameters
+  allocations: {},
+  allocationRound: 1,
+  allocationBudget: 0,
+  allocationSetupVersion: 2,
   history: [],
   flashCompletedRounds: {},
   datasetDownloadedRounds: {},
@@ -31,6 +42,10 @@ const defaults = {
 let state = loadState();
 let timer = null;
 let renderedEventId = null;
+let allocationSaveTimer = null;
+let teamSyncTimer = null;
+let remoteMoneyPollBusy = false;
+let lastBlurActivityAt = 0;
 
 /* ── Persistence ─────────────────────────────────────────── */
 function loadState() {
@@ -52,9 +67,12 @@ function eventStorageKey(teamId = state.teamId) {
 function readState(key) {
   try {
     const loaded = JSON.parse(localStorage.getItem(key) || "{}");
+    if (!Object.keys(loaded).length) return structuredClone(defaults);
+    if (loaded.scoringVersion !== 2) return { ...structuredClone(defaults), teamId: loaded.teamId || "", page: loaded.teamId ? "industries" : "login" };
     return {
       ...defaults,
       ...loaded,
+      allocationSetupVersion: loaded.allocationSetupVersion ?? 0,
       allocations: { ...defaults.allocations, ...(loaded.allocations || {}) },
       flashCompletedRounds: { ...defaults.flashCompletedRounds, ...(loaded.flashCompletedRounds || {}) },
       datasetDownloadedRounds: { ...defaults.datasetDownloadedRounds, ...(loaded.datasetDownloadedRounds || {}) },
@@ -65,9 +83,51 @@ function readState(key) {
   }
 }
 
-function save() {
+function apiBase() {
+  const host = location.hostname.toLowerCase();
+  const localPage = location.protocol === "file:" || host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  const fallback = localPage ? "http://127.0.0.1:8000/api" : `${location.origin}/api`;
+  return String(window.DATA_TYCOON_API_BASE || fallback).replace(/\/$/, "");
+}
+
+function scheduleTeamSync() {
+  if (!state.teamId) return;
+  clearTimeout(teamSyncTimer);
+  teamSyncTimer = setTimeout(() => {
+    teamSyncTimer = null;
+    const snapshot = {
+      teamId: state.teamId,
+      industry: state.industry,
+      round: state.round,
+      companyValue: state.companyValue,
+      moneyRevision: state.moneyRevision || 0,
+      allocations: state.allocations,
+      history: state.history,
+      page: state.page,
+      isEliminated: state.isEliminated
+    };
+    fetch(`${apiBase()}/team/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(snapshot),
+      keepalive: true
+    }).then(response => {
+      if (!response.ok) throw new Error(`Team sync failed (${response.status})`);
+    }).catch(error => {
+      console.warn("Data Tycoon could not sync this team to the organizer server; retrying.", error);
+      if (state.teamId) teamSyncTimer = setTimeout(scheduleTeamSync, 5000);
+    });
+  }, 180);
+}
+
+function persistState({ sync = true } = {}) {
   localStorage.setItem(STATE_KEY, JSON.stringify(state));
   if (state.teamId) localStorage.setItem(teamStateKey(state.teamId), JSON.stringify(state));
+  if (sync) scheduleTeamSync();
+}
+
+function save() {
+  persistState();
   if (state.teamId && state.industry) {
     updateTeamInLeaderboard({
       teamId: state.teamId,
@@ -82,9 +142,78 @@ function save() {
 /* ── Formatting & Helper Utilities ────────────────────────── */
 const page = document.querySelector("#page");
 const overlay = document.querySelector("#newsOverlay");
-const money = v => `$${Math.round(v).toLocaleString("en-US")}`;
+const money = v => `₹${Math.round(Number(v) || 0).toLocaleString("en-IN")}`;
 const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-const investmentRuleText = "Each subsystem must receive at least $100, and every investment must be a multiple of $100.";
+const investmentRuleText = () => `Invest exactly ${money(roundBudget())} in total. Each parameter must receive at least ₹1,000.`;
+
+function roundParameters() {
+  return parametersByIndustry[state.industry] || parametersByIndustry.Food;
+}
+
+function datasetRoundKey() {
+  return `${state.industry || "Food"}-${state.round}`;
+}
+
+function ensureRoundAllocations() {
+  const parameters = roundParameters();
+  const budget = roundBudget();
+  if (!state.allocations || state.allocationRound !== state.round || state.allocationBudget !== budget || state.allocationSetupVersion !== 2 || parameters.some(name => !Object.hasOwn(state.allocations, name))) {
+    state.allocations = Object.fromEntries(parameters.map(name => [name, 0]));
+    state.allocationRound = state.round;
+    state.allocationBudget = budget;
+    state.allocationSetupVersion = 2;
+    save();
+  }
+}
+
+function scheduleAllocationSave() {
+  clearTimeout(allocationSaveTimer);
+  allocationSaveTimer = setTimeout(() => {
+    allocationSaveTimer = null;
+    persistState();
+  }, 250);
+}
+
+function trackActivity(kind, detail) {
+  if (!state.teamId) return;
+  fetch(`${apiBase()}/team/activity`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ teamId: state.teamId, kind, detail }),
+    keepalive: true
+  }).catch(() => {});
+}
+
+async function syncOrganizerMoney() {
+  if (!state.teamId || remoteMoneyPollBusy) return;
+  remoteMoneyPollBusy = true;
+  try {
+    const response = await fetch(`${apiBase()}/team/${encodeURIComponent(state.teamId)}`, { cache: "no-store" });
+    if (!response.ok) return;
+    const remote = await response.json();
+    if (Number(remote.moneyRevision || 0) <= Number(state.moneyRevision || 0)) return;
+    state.moneyRevision = Number(remote.moneyRevision);
+    state.companyValue = Number(remote.companyValue) || 0;
+    persistState({ sync: false });
+    updateTeamInLeaderboard({ teamId: state.teamId, industry: state.industry, round: state.round, companyValue: state.companyValue, history: state.history });
+    if (state.page === "game") render();
+    trackActivity("organizer-balance-applied", `Organizer updated the team's balance to ${money(state.companyValue)}.`);
+  } catch {
+    // The game stays playable if the organizer service is temporarily offline.
+  } finally {
+    remoteMoneyPollBusy = false;
+  }
+}
+
+async function sendTeamHeartbeat() {
+  if (!state.teamId) return;
+  fetch(`${apiBase()}/team/heartbeat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ teamId: state.teamId }),
+    keepalive: true
+  }).catch(() => {});
+}
 
 function showPage(id) {
   state.page = id;
@@ -124,7 +253,7 @@ function renderPhaseBar() {
 /* ── SVG Company Valuation Trajectory Chart ──────────────── */
 function companyValueChart() {
   const hist = state.history || [];
-  const op = hist[0]?.previousValue || 100000;
+  const op = hist[0]?.previousValue || BASE_ROUND_BUDGET;
   const pts = [{ round: 0, value: op }];
   hist.forEach(r => pts.push({ round: r.round, value: r.newValue }));
   const vals = pts.map(p => p.value);
@@ -166,10 +295,11 @@ function renderLogin() {
     <div class="front-copy">
       <div class="breaking-banner">TECHTATVA '26 · DATA TYCOON</div>
       <h2>WELCOME,<br><em>ANALYSTS.</em></h2>
-      <p class="lead">Analyze the storyline flashes & dataset CSV files to allocate your capital strategically across company subsystems.</p>
+      <p class="lead">Read each industry dataset, then allocate the fixed round budget across its ten parameters.</p>
       <div class="front-note">
         <span class="article-label">EVENT RULES</span>
-        <p>Choose 1 industry across 4 rounds. Starting Balance: <b>$100,000</b>. Invest in dollar amounts (multiples of $100). The storyline flashes contain the true subsection multiplier hints!</p>
+        <p>Choose one industry for four rounds. Start with <b>₹1,000,000</b>; your balance carries forward, with a ₹250,000 bonus before Flash 2 and Flash 3. Download each industry dataset and invest the full round budget across ten parameters, with a ₹1,000 minimum per parameter.</p>
+        <p class="monitoring-notice">Event integrity notice: team activity, window focus changes, and detected screenshot shortcuts are logged for organizer review. The site does not capture your screen, camera, or audio.</p>
       </div>
     </div>
     <form class="login-form" id="loginForm">
@@ -214,46 +344,16 @@ function renderIndustries() {
 }
 
 /* ── Dynamic CSV Dataset File Generator & Downloader ─────── */
-function downloadDatasetCSV() {
-  const ind = state.industry || "Pharma";
-  const dataset = industryDatasets[ind] || {
-    companyName: `${ind} Team Dataset`,
-    profile: "Replace this placeholder with the dataset provided by the event organizers.",
-    history: [],
-    market: { inputCosts: "Provided externally", demand: "Provided externally", logistics: "Provided externally", technology: "Provided externally" }
-  };
-  const round = state.round;
-
-  let csvContent = `DATA TYCOON OFFICIAL DATASET - ${ind.toUpperCase()} (ROUND ${round})\n`;
-  csvContent += `Company Name: ${dataset.companyName}\n`;
-  csvContent += `Market Profile: ${dataset.profile}\n`;
-  csvContent += `Organizer Note: Replace this downloadable placeholder with the official dataset file when it is provided.\n\n`;
-  csvContent += `Quarter,Revenue,Demand_Index_%,Operating_Costs_%,Market_Index\n`;
-
-  dataset.history.forEach(row => {
-    csvContent += `"${row.quarter}","${row.revenue}",${row.demand},${row.costs},${row.index}\n`;
-  });
-
-  csvContent += `\nSECTOR INDICATORS (ROUND ${round}):\n`;
-  csvContent += `Input Costs,${dataset.market.inputCosts}\n`;
-  csvContent += `Consumer Demand,${dataset.market.demand}\n`;
-  csvContent += `Logistics,${dataset.market.logistics}\n`;
-  csvContent += `Technology,${dataset.market.technology}\n`;
-
-  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
+function downloadRoundDataset() {
+  const filePath = datasetFor(state.industry || "Food", state.round);
   const link = document.createElement("a");
-  link.setAttribute("href", url);
-  link.setAttribute("download", `DataTycoon_${ind}_Round${round}_Dataset.csv`);
+  link.href = filePath;
+  link.download = filePath.split("/").at(-1);
   document.body.appendChild(link);
   link.click();
-  document.body.removeChild(link);
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-
-  state.datasetDownloadedRounds = {
-    ...state.datasetDownloadedRounds,
-    [round]: true
-  };
+  link.remove();
+  state.datasetDownloadedRounds = { ...state.datasetDownloadedRounds, [datasetRoundKey()]: true };
+  trackActivity("dataset-downloaded", `Downloaded ${state.industry || "Food"} Flash ${state.round} dataset.`);
   save();
   render();
 }
@@ -263,175 +363,83 @@ function renderGame() {
   if (!state.industry) {
     return `${shellHeading("STEP 1 REQUIRED", "NO INDUSTRY SELECTED")}
     <p class="lead">Please select an industry first before accessing the dashboard.</p>
-    <button data-action="nav" data-page="industries">GO TO INDUSTRY SELECTION ➔</button>`;
+    <button data-action="nav" data-page="industries">GO TO INDUSTRY SELECTION</button>`;
+  }
+  if (state.isEliminated) {
+    return `${shellHeading("ROUND DISQUALIFICATION", "YOUR TEAM IS ELIMINATED")}
+      <p class="lead">The zero-return subsystem received more than 80% of the round budget. Your team cannot submit more rounds.</p>
+      <button data-action="nav" data-page="leaderboard">VIEW LEADERBOARD</button>`;
   }
 
+  ensureRoundAllocations();
   const alloc = state.allocations;
-  let currentCap = state.companyValue;
-  const totalInvested = subDepartments.reduce((sum, d) => sum + Number(alloc[d] || 0), 0);
-  let remainingCash = currentCap - totalInvested;
+  const parameters = roundParameters();
+  const datasetPath = datasetFor(state.industry, state.round);
+  const dataFileName = datasetPath.split("/").at(-1);
+  const currentCap = roundBudget();
+  const totalInvested = parameters.reduce((sum, name) => sum + Number(alloc[name] || 0), 0);
+  const remainingCash = currentCap - totalInvested;
   const valid = allocationValid();
-  const currentEvent = events.find(e => e.round === state.round) || events[0];
   const rankInfo = getTeamRank(state.teamId);
   const flashComplete = Boolean(state.flashCompletedRounds?.[state.round]);
-  const datasetDownloaded = Boolean(state.datasetDownloadedRounds?.[state.round]);
+  const datasetDownloaded = Boolean(state.datasetDownloadedRounds?.[datasetRoundKey()]);
   const roundSubmitted = state.history.some(result => result.round === state.round);
   const investmentUnlocked = flashComplete && datasetDownloaded && !roundSubmitted;
+  const rows = parameters.map((name, index) => `<tr>
+    <td><strong>${esc(name)}</strong><small style="display:block;color:var(--muted);font-size:9px">${index < 5 ? "Common parameter" : "Industry parameter"}</small></td>
+    <td style="font-size:10px;color:var(--muted)">Minimum ₹1,000</td>
+    <td class="allocation-input-cell"><span style="font-weight:bold">₹</span><input id="alloc-${index}" type="number" min="1000" max="${currentCap}" step="1" value="${Number(alloc[name] ?? 0)}" data-allocation="${esc(name)}" ${investmentUnlocked ? "" : "disabled"} style="width:110px;text-align:right;padding:8px;font-weight:bold;"></td>
+  </tr>`).join("");
 
-  // Government Grant in Round 2
-  let grantBanner = "";
-  if (state.round === 2 && !state.round2GrantApplied) {
-    state.companyValue += 10000;
-    state.round2GrantApplied = true;
-    save();
-    grantBanner = `<div style="background:#23652c;color:#fff;padding:12px 18px;font:700 12px 'DM Mono',monospace;letter-spacing:.05em;margin-bottom:14px">🏛️ GOVERNMENT RELIEF GRANT APPLIED: +$10,000 Credited for Round 2!</div>`;
-  } else if (state.round === 2) {
-    grantBanner = `<div style="background:#23652c;color:#fff;padding:12px 18px;font:700 12px 'DM Mono',monospace;letter-spacing:.05em;margin-bottom:14px">🏛️ GOVERNMENT GRANT APPLIED · +$10,000 CREDITED</div>`;
-  }
-  currentCap = state.companyValue;
-  remainingCash = currentCap - totalInvested;
-
-  // Offline Bonus for Rounds 3 & 4
-  let offlineCard = "";
-  const rk = state.round === 3 ? "round3" : "round4";
-  if ((state.round === 3 || state.round === 4) && !state.offlineBonusClaimed[rk]) {
-    offlineCard = `<div style="border:2px dashed #8e211b;background:#fdf6e7;padding:16px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;gap:12px">
-      <div>
-        <b style="color:#8e211b;display:block">🎯 OPTIONAL ROOM CHALLENGE (+$15,000 BONUS)</b>
-        <span style="font-size:11px;color:#555">Complete the live offline challenge to claim +$15,000 bonus.</span>
-      </div>
-      <button data-action="claim-offline-bonus" style="background:#8e211b;border-color:#8e211b;white-space:nowrap">CLAIM $15,000 BONUS</button>
-    </div>`;
-  } else if ((state.round === 3 || state.round === 4) && state.offlineBonusClaimed[rk]) {
-    offlineCard = `<div style="background:#23652c;color:#fff;padding:12px 18px;font:700 12px 'DM Mono',monospace;letter-spacing:.05em;margin-bottom:14px">🎯 OFFLINE ROOM BONUS CLAIMED · +$15,000 CREDITED</div>`;
-  }
-
-  const rows = subDepartments.map(name => {
-    const val = Number(alloc[name] ?? 0);
-    return `<tr>
-      <td>
-        <strong>${name}</strong>
-        <small style="display:block;color:var(--muted);font-size:9px">${name} operations & subsystem capital</small>
-      </td>
-      <td style="font-size:10px;color:var(--muted)">Minimum $100, multiples of $100</td>
-      <td class="allocation-input-cell">
-        <span style="font-weight:bold">$</span>
-        <input id="alloc-${name.replaceAll(" ", "-")}" type="number" min="100" max="${currentCap}" step="100" value="${val}" data-allocation="${name}" ${investmentUnlocked ? "" : "disabled"} style="width:110px;text-align:right;padding:8px;font-weight:bold;">
-      </td>
-    </tr>`;
-  }).join("");
-
-  return `<div class="live-label">● LIVE MARKET DASHBOARD · ROUND ${String(state.round).padStart(2, "0")} OF 04</div>
+  return `<div class="live-label">LIVE MARKET DASHBOARD · ROUND ${String(state.round).padStart(2, "0")} OF 04</div>
   ${shellHeading(`${esc(state.industry.toUpperCase())} INDUSTRY`, `ROUND ${state.round} DASHBOARD`)}
-  
-  ${grantBanner}
-  ${offlineCard}
-
-  <!-- TOP METRICS STRIP -->
-  <div class="market-tape" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 20px;">
-    <div>
-      <small>TOTAL CAPITAL BALANCE</small>
-      <b style="font-size: 18px; color: var(--green);">${money(currentCap)}</b>
-    </div>
-    <div>
-      <small>LEADERBOARD RANK</small>
-      <b style="font-size: 18px; color: var(--red);">${rankInfo.rank} <span style="font-size:10px;font-weight:normal;color:var(--muted)">of ${rankInfo.total} teams</span></b>
-    </div>
-    <div>
-      <small>ROUND PROGRESS</small>
-      <b>ROUND ${state.round} / 4</b>
-    </div>
-    <div>
-      <small>SELECTED INDUSTRY</small>
-      <b>${esc(state.industry)}</b>
-    </div>
+  <div class="market-tape" style="grid-template-columns: repeat(4, 1fr); margin-bottom:20px">
+    <div><small>ROUND BUDGET</small><b style="font-size:18px;color:var(--green)">${money(currentCap)}</b></div>
+    <div><small>LEADERBOARD RANK</small><b style="font-size:18px;color:var(--red)">${rankInfo.rank} <span style="font-size:10px;font-weight:normal;color:var(--muted)">of ${rankInfo.total} teams</span></b></div>
+    <div><small>ROUND PROGRESS</small><b>ROUND ${state.round} / 4</b></div>
+    <div><small>SELECTED INDUSTRY</small><b>${esc(state.industry)}</b></div>
   </div>
-
-  <!-- SECTION 1: INSTRUCTIONS -->
-  <section class="analysis-card" style="margin-bottom: 20px; border-left: 4px solid var(--red); background: #fbf7ec;">
-    <span class="article-label" style="color: var(--red);">📋 ROUND INSTRUCTIONS & RULES</span>
-    <h3 style="margin: 8px 0 12px;">HOW TO PLAY THIS ROUND</h3>
-    <ol style="font-size: 12px; line-height: 1.8; margin: 0; padding-left: 20px;">
-      <li><b>Read the Storyline Flash</b>: Complete the <b>5-Minute Story Flash</b>. You will return to this dashboard automatically.</li>
-      <li><b>Download Dataset</b>: Download the provided CSV dataset file for Round ${state.round} using the download button below.</li>
-      <li><b>Strategic Investment</b>: Invest dollar amounts in multiples of $100 into all 5 sub-departments (Production, Marketing, Logistics, R&D, HR). Any unallocated funds will be held safely in Cash.</li>
-      <li><b>Lock & Submit</b>: Click <b>LOCK & SUBMIT ROUND INVESTMENTS</b> when ready!</li>
+  <section class="analysis-card" style="margin-bottom:20px;border-left:4px solid var(--red);background:#fbf7ec">
+    <span class="article-label" style="color:var(--red)">ROUND INSTRUCTIONS</span><h3 style="margin:8px 0 12px">HOW TO PLAY THIS ROUND</h3>
+    ${roundBonusFor() ? `<p style="font-weight:bold;color:var(--green)">Previous round balance: ${money(roundBudget() - roundBonusFor())} + Flash ${state.round} bonus: ${money(roundBonusFor())}.</p>` : state.round > 1 ? `<p style="font-weight:bold;color:var(--green)">Carried forward from the previous round: ${money(roundBudget())}.</p>` : ""}
+    <ol style="font-size:12px;line-height:1.8;margin:0;padding-left:20px">
+    <li>Open the round flash whenever needed; every opening starts a five-minute screen lock.</li>
+      <li>Download the official dataset for this industry and round.</li>
+      <li>Allocate exactly ${money(currentCap)} across the ten parameters, with at least ₹1,000 in each.</li>
+      <li>Submit to calculate your payout and round score.</li>
     </ol>
   </section>
-
-  <!-- SECTION 2: STORYLINE FLASH LAUNCHER (GUARANTEED OPENING) -->
-  <section style="border: 2px solid var(--red); background: #fdf2f0; padding: 20px; margin-bottom: 24px; text-align: center;">
-    <span class="article-label" style="color: var(--red); font-size: 11px;">📰 MANDATORY STORYLINE FLASH · ROUND ${state.round}</span>
-    <h2 style="font-family: 'Playfair Display', serif; font-size: 24px; margin: 10px 0 6px;">${esc(currentEvent.headline)}</h2>
-    <p style="font-size: 13px; color: #555; max-width: 700px; margin: 0 auto 16px;">${esc(currentEvent.subheadline)}</p>
-    <button data-action="open-flash" ${flashComplete ? "disabled" : ""} style="background: var(--red); border-color: var(--red); color: white; padding: 16px 32px; font-size: 13px; letter-spacing: .12em; box-shadow: 0 4px 12px rgba(142,33,27,0.3); cursor: pointer;">
-      ${flashComplete ? `✓ ROUND ${state.round} FLASH COMPLETED` : `⚡ READ ROUND ${state.round} STORY FLASH (5 MIN LOCK TIMER)`}
+  <section style="border:2px solid var(--red);background:#fdf2f0;padding:20px;margin-bottom:24px;text-align:center">
+    <span class="article-label" style="color:var(--red);font-size:11px">MANDATORY STORYLINE FLASH · ROUND ${state.round}</span>
+    <h2 style="font-family:'Playfair Display',serif;font-size:24px;margin:10px 0 6px">ROUND ${state.round} FLASH</h2>
+    <p style="font-size:13px;color:#555;max-width:700px;margin:0 auto 16px">Every time you open this flash, your screen will be locked for five minutes. You can reopen it after the timer ends.</p>
+    <button data-action="open-flash" style="background:var(--red);border-color:var(--red);color:white;padding:16px 32px;font-size:13px;letter-spacing:.12em">
+      OPEN FLASH · START 5-MINUTE LOCK
     </button>
   </section>
-
-  <!-- SECTION 3: DOWNLOADABLE DATASET FILE BUTTON -->
-  <section class="analysis-card" style="margin-bottom: 24px; text-align: center; padding: 24px;">
+  <section class="analysis-card" style="margin-bottom:24px;text-align:center;padding:24px">
     <span class="article-label">ROUND ${state.round} DATASET FILE</span>
-    <h3 style="margin: 8px 0 10px;">${esc(state.industry.toUpperCase())} QUARTERLY DATASET</h3>
-    <p style="font-size: 12px; color: var(--muted); margin-bottom: 16px;">Download the Round ${state.round} dataset file. The organizers can replace this downloadable CSV with the provided official dataset.</p>
-    <button data-action="download-dataset" ${flashComplete ? "" : "disabled"} style="background: var(--ink); color: var(--paper); padding: 14px 28px; font-size: 12px; letter-spacing: .1em;">
-      ${datasetDownloaded ? `✓ DATASET DOWNLOADED · DOWNLOAD AGAIN` : `📥 DOWNLOAD ROUND ${state.round} DATASET (.CSV)`}
+    <h3 style="margin:8px 0 10px">${esc(state.industry.toUpperCase())} DATASET</h3>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px">Download the supplied dataset for this industry and round.</p>
+    <button data-action="download-dataset" ${flashComplete ? "" : "disabled"} style="background:var(--ink);color:var(--paper);padding:14px 28px;font-size:12px;letter-spacing:.1em">
+      ${datasetDownloaded ? "DATASET DOWNLOADED · DOWNLOAD AGAIN" : `DOWNLOAD ROUND ${state.round} DATASET (${dataFileName.split(".").at(-1).toUpperCase()})`}
     </button>
-    ${flashComplete ? "" : `<p class="error" style="font-size:11px;margin:12px 0 0;">Complete the storyline flash to unlock the dataset.</p>`}
+    ${flashComplete ? "" : `<p class="error" style="font-size:11px;margin:12px 0 0">Complete the storyline flash to unlock the dataset.</p>`}
   </section>
-
-  <!-- SECTION 4: CAPITAL ALLOCATION FORM (IN MULTIPLES OF $100) -->
+  ${companyValueChart()}
   <section class="allocation-section">
-    <div class="article-label">INVESTMENT ALLOCATION DESK</div>
-    <h2>INVESTMENT IN SUB-DEPARTMENTS ($ AMOUNT)</h2>
-    <p class="allocation-intro">${investmentRuleText} Unallocated funds automatically remain as Cash.</p>
-    
-    <div class="table-scroll">
-      <table class="alloc-table">
-        <thead>
-          <tr>
-            <th>Sub-Department / Sector</th>
-            <th>Rule</th>
-            <th class="align-right">Investment ($ Amount)</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows}
-        </tbody>
-      </table>
+    <div class="article-label">INVESTMENT ALLOCATION DESK</div><h2>INVEST ACROSS THE TEN PARAMETERS</h2>
+    <p class="allocation-intro">${investmentRuleText()} Allocation bands adjust returns. Concentrating more than 40% in the loss trap can create a direct loss; putting more than 80% in the zero-return trap disqualifies the round.</p>
+    <div class="table-scroll"><table class="alloc-table"><thead><tr><th>Industry parameter</th><th>Rule</th><th class="align-right">Investment amount</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div style="background:#e9e1cf;border:1px solid var(--ink);padding:16px;margin:16px 0;font-family:'DM Mono',monospace;font-size:12px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>REQUIRED ROUND BUDGET:</span><b>${money(currentCap)}</b></div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:6px"><span>TOTAL INVESTED:</span><b id="totalInvestedAmount">${money(totalInvested)}</b></div>
+      <div style="display:flex;justify-content:space-between;border-top:1px solid var(--rule);padding-top:6px;font-size:14px;font-weight:bold;color:var(--green)"><span>REMAINING TO ALLOCATE:</span><b id="remainingCashAmount">${money(remainingCash)}</b></div>
     </div>
-
-    <!-- LIVE CAPITAL TICKER SUMMARY -->
-    <div style="background:#e9e1cf; border:1px solid var(--ink); padding:16px; margin:16px 0; font-family:'DM Mono',monospace; font-size:12px;">
-      <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
-        <span>STARTING CAPITAL BALANCE:</span>
-        <b>${money(currentCap)}</b>
-      </div>
-      <div style="display:flex; justify-content:space-between; margin-bottom:6px; color:var(--red);">
-        <span>TOTAL INVESTED IN SUBSYSTEMS:</span>
-        <b>-${money(totalInvested)}</b>
-      </div>
-      <div style="display:flex; justify-content:space-between; border-top:1px solid var(--rule); padding-top:6px; font-size:14px; font-weight:bold; color:var(--green);">
-        <span>REMAINING UNALLOCATED CASH RESERVE:</span>
-        <b>${money(remainingCash)}</b>
-      </div>
+    <div id="allocationTotal" class="total ${valid ? "valid" : "invalid"}" style="font-size:13px">
+      ${roundSubmitted ? `ROUND ${state.round} ALREADY SUBMITTED` : !flashComplete ? "COMPLETE THE STORYLINE FLASH TO CONTINUE" : !datasetDownloaded ? `DOWNLOAD THE ROUND ${state.round} DATASET TO UNLOCK INVESTMENTS` : valid ? `ALLOCATIONS VALID · ${money(totalInvested)} INVESTED` : `INVALID · TOTAL MUST EQUAL ${money(currentCap)}; EACH PARAMETER MUST BE AT LEAST ₹1,000`}
     </div>
-
-    <div id="allocationTotal" class="total ${valid ? "valid" : "invalid"}" style="font-size:13px;">
-      ${roundSubmitted
-      ? `✓ ROUND ${state.round} INVESTMENTS ALREADY SUBMITTED`
-      : !flashComplete
-        ? `🔒 COMPLETE THE STORYLINE FLASH TO CONTINUE`
-        : !datasetDownloaded
-          ? `🔒 DOWNLOAD THE ROUND ${state.round} DATASET TO UNLOCK INVESTMENTS`
-          : valid
-            ? `✅ ALLOCATIONS VALID · $${totalInvested.toLocaleString()} INVESTED, $${remainingCash.toLocaleString()} CASH RESERVE`
-            : `❌ INVALID ALLOCATION · ${investmentRuleText.toUpperCase()} TOTAL CANNOT EXCEED BALANCE ($${currentCap.toLocaleString()})`}
-    </div>
-
-    <button id="submitAllocation" data-action="submit-round" ${valid && investmentUnlocked ? "" : "disabled"} style="width: 100%; padding: 16px; font-size: 13px; margin-top: 12px;">
-      🔒 LOCK & SUBMIT ROUND ${state.round} INVESTMENTS ➔
-    </button>
+    <button id="submitAllocation" data-action="submit-round" ${valid && investmentUnlocked ? "" : "disabled"} style="width:100%;padding:16px;font-size:13px;margin-top:12px">LOCK & SUBMIT ROUND ${state.round}</button>
   </section>`;
 }
 
@@ -443,24 +451,27 @@ function renderResults() {
     <button data-action="nav" data-page="game">RETURN TO DASHBOARD ➔</button>`;
   }
 
-  const rows = subDepartments.map(name => `<tr>
-    <td><b>${name}</b></td>
-    <td>${money(result.investedAmounts?.[name] || 0)}</td>
-    <td><b style="color:var(--red);">${(result.multipliers?.[name] || 1).toFixed(2)}x</b></td>
+  const rows = Object.entries(result.investedAmounts || {}).map(([name, amount]) => `<tr>
+    <td><b>${esc(name)}</b></td>
+    <td>${(Number(amount) / (result.roundBudget || BASE_ROUND_BUDGET) * 100).toFixed(2)}%</td>
+    <td>${money(amount)}</td>
     <td><b>${money(result.departmentRevenues?.[name] || 0)}</b></td>
   </tr>`).join("");
 
   const rankInfo = getTeamRank(state.teamId);
 
-  return `${shellHeading(`ROUND ${String(result.round).padStart(2, "0")} CLOSE`, "INVESTMENT RESULTS & REVENUE")}
+  return `${shellHeading(`ROUND ${String(result.round).padStart(2, "0")} CLOSE`, result.eliminated ? "TEAM ELIMINATED" : "INVESTMENT RESULTS")}
   ${companyValueChart()}
 
   <section class="results-card">
     <div class="article-label">${esc(state.industry || "INDUSTRY")} PERFORMANCE REPORT</div>
     <h2>ROUND ${result.round} FINANCIAL CLOSE</h2>
     <div class="result-highlight">
-      <span>NET CAPITAL CHANGE: ${money(result.previousValue)} → ${money(result.newValue)}</span>
-      <strong>${money(result.newValue)}</strong>
+      <span>FINAL ROUND PAYOUT</span>
+      <strong>${money(result.finalPayout ?? result.newValue)}</strong>
+      <span>NET PROFIT: ${money(result.netProfit ?? (result.newValue - (result.roundBudget || BASE_ROUND_BUDGET)))}</span>
+      ${result.roundBonus ? `<span style="margin-top:8px;font-weight:bold;color:var(--green)">PRE-ROUND TEAM BONUS ADDED TO FLASH ${result.round} BUDGET: +${money(result.roundBonus)}</span>` : ""}
+      ${result.eliminated ? `<span class="error">DISQUALIFIED: the zero-return trap exceeded the 80% limit. Investment payout is zero; any round bonus is still credited.</span>` : ""}
       <span style="margin-top:8px;font-weight:bold;color:var(--red)">CURRENT LEADERBOARD RANK: ${rankInfo.rank} of ${rankInfo.total} Teams</span>
     </div>
 
@@ -468,26 +479,22 @@ function renderResults() {
       <table>
         <thead>
           <tr>
-            <th>Sub-Department</th>
-            <th>Invested Amount ($)</th>
-            <th>Flash Multiplier</th>
-            <th>Generated Revenue ($)</th>
+            <th>Investment parameter</th>
+            <th>Allocation</th>
+            <th>Invested amount</th>
+            <th>Amount returned</th>
           </tr>
         </thead>
         <tbody>
           ${rows}
-          <tr style="background:#ded3bd; font-weight:bold;">
-            <td>Cash Reserve (Unallocated)</td>
-            <td>${money(result.cashReserve || 0)}</td>
-            <td>${(result.cashMultiplier ?? result.multipliers?.Cash ?? 1).toFixed(2)}x</td>
-            <td>${money(result.cashRevenue ?? result.cashReserve ?? 0)}</td>
-          </tr>
         </tbody>
       </table>
     </div>
 
     <div style="margin-top: 24px; text-align: center;">
-      ${result.round < 4 ? `
+      ${result.eliminated ? `
+        <button data-action="nav" data-page="leaderboard" style="padding:16px 32px;font-size:13px;background:var(--red);border-color:var(--red)">VIEW LEADERBOARD</button>
+      ` : result.round < 4 ? `
         <button data-action="next-round" style="padding: 16px 32px; font-size: 13px; background: var(--green); border-color: var(--green);">
           PROCEED TO ROUND ${result.round + 1} DASHBOARD ➔
         </button>
@@ -511,7 +518,7 @@ function renderLeaderboard() {
       <td><b>${esc(t.teamId)}</b>${isMe ? ' <span style="color:var(--red)">(YOU)</span>' : ""}</td>
       <td>${esc(t.industry || "—")}</td>
       <td>Round ${t.round || 1}</td>
-      <td><b style="font-size:14px;color:var(--green);">${money(t.companyValue || 100000)}</b></td>
+      <td><b style="font-size:14px;color:var(--green);">${money(t.companyValue ?? BASE_ROUND_BUDGET)}</b></td>
     </tr>`;
   }).join("");
 
@@ -555,85 +562,88 @@ function render() {
   page.focus({ preventScroll: true });
 }
 
-/* ── Allocation Validation (Multiples of $100) ───────────── */
+/* ── Allocation Validation (full round budget, ₹1,000 minimum) ── */
 function allocationValid() {
-  const a = state.allocations;
-  const currentCap = state.companyValue;
-  const totalInvested = subDepartments.reduce((sum, d) => sum + Number(a[d] || 0), 0);
-
-  // Validation rules:
-  // 1. Every subsystem must receive a positive amount in multiples of 100
-  const allSubsystemsFundedInHundreds = subDepartments.every(n => {
-    const val = Number(a[n] || 0);
-    return Number.isFinite(val) && val >= 100 && val % 100 === 0;
+  ensureRoundAllocations();
+  const parameters = roundParameters();
+  const totalInvested = parameters.reduce((sum, name) => sum + Number(state.allocations[name] || 0), 0);
+  const allParametersMeetMinimum = parameters.every(name => {
+    const amount = Number(state.allocations[name]);
+    return Number.isInteger(amount) && amount >= 1_000;
   });
-
-  // 2. Total invested cannot exceed total available capital balance
-  const withinBalance = totalInvested <= currentCap;
-
-  return allSubsystemsFundedInHundreds && withinBalance;
+  return allParametersMeetMinimum && totalInvested === roundBudget();
 }
 
-/* ── Close Round & Revenue Calculation ──────────────────── */
+function computeEffectiveMultiplier(baseMultiplier, allocation) {
+  const percentage = allocation / roundBudget() * 100;
+  if (baseMultiplier === 0) return { multiplier: 0, eliminated: percentage > 80 };
+  if (baseMultiplier === 0.3) return { multiplier: percentage > 40 ? -0.9 : 0.3, eliminated: false };
+  if ([1.0, 0.8, 0.7, 0.5].includes(baseMultiplier)) return { multiplier: baseMultiplier, eliminated: false };
+  if (baseMultiplier === 2.7) {
+    if (percentage <= 20) return { multiplier: 2.7 * 0.8, eliminated: false };
+    if (percentage <= 40) return { multiplier: 2.7, eliminated: false };
+    if (percentage <= 60) return { multiplier: 2.7 * 0.9, eliminated: false };
+    if (percentage <= 80) return { multiplier: 2.7 * 0.7, eliminated: false };
+    return { multiplier: 2.7 * 0.6, eliminated: false };
+  }
+  if ([1.8, 1.5, 1.2].includes(baseMultiplier)) {
+    if (percentage <= 40) return { multiplier: baseMultiplier, eliminated: false };
+    if (percentage <= 60) return { multiplier: baseMultiplier * 0.9, eliminated: false };
+    if (percentage <= 80) return { multiplier: baseMultiplier * 0.7, eliminated: false };
+    return { multiplier: baseMultiplier * 0.6, eliminated: false };
+  }
+  return { multiplier: baseMultiplier, eliminated: false };
+}
+
 function closeRound() {
-  const roundReady = state.flashCompletedRounds?.[state.round]
-    && state.datasetDownloadedRounds?.[state.round];
+  const roundReady = state.flashCompletedRounds?.[state.round] && state.datasetDownloadedRounds?.[datasetRoundKey()];
   const roundAlreadySubmitted = state.history.some(result => result.round === state.round);
-  if (!allocationValid() || !roundReady || roundAlreadySubmitted) return;
-  const ev = events.find(e => e.round === state.round) || events[0];
-  const ind = state.industry || "Pharma";
-  const flashMults = ev.flashMultipliers[ind] || {};
-  const startingBal = state.companyValue;
-  const alloc = state.allocations;
+  if (!allocationValid() || !roundReady || roundAlreadySubmitted || state.isEliminated) return;
 
-  const investedAmounts = {};
-  let totalInvestedInSubsystems = 0;
-  subDepartments.forEach(name => {
-    const amt = Number(alloc[name] || 0);
-    investedAmounts[name] = amt;
-    totalInvestedInSubsystems += amt;
+  const parameters = roundParameters();
+  const currentBudget = roundBudget();
+  const baseMultipliers = payoutMultipliers[state.industry || "Food"]?.[state.round] || {};
+  const allocations = Object.fromEntries(parameters.map(name => [name, Number(state.allocations[name]) || 0]));
+  const subsystemResults = {};
+  let eliminated = false;
+  let computedPayout = 0;
+
+  parameters.forEach(name => {
+    const allocation = allocations[name];
+    const baseMultiplier = baseMultipliers[name] ?? 0;
+    const { multiplier: effectiveMultiplier, eliminated: subsystemEliminated } = computeEffectiveMultiplier(baseMultiplier, allocation);
+    const payout = allocation * effectiveMultiplier;
+    if (subsystemEliminated) eliminated = true;
+    subsystemResults[name] = { allocation, allocationPercentage: allocation / currentBudget * 100, payout };
+    computedPayout += payout;
   });
 
-  // Remaining unallocated balance is scored with the flash's Cash multiplier.
-  const cashReserve = startingBal - totalInvestedInSubsystems;
-
-  // Penalty modifier (set to 1.0)
-  const penaltyModifier = 1.0;
-
-  // revenue = Σ(investment_i × flashMultiplier_i) × penaltyModifier
-  const deptRevenues = {};
-  let grossRevenueFromInvestments = 0;
-  subDepartments.forEach(name => {
-    const mult = flashMults[name] || 1.0;
-    const rev = investedAmounts[name] * mult * penaltyModifier;
-    deptRevenues[name] = rev;
-    grossRevenueFromInvestments += rev;
-  });
-
-  const cashMultiplier = flashMults.Cash ?? 1.0;
-  const cashRevenue = cashReserve * cashMultiplier;
-
-  // new_balance = subsystem revenue + multiplier-adjusted cash reserve
-  const newBalance = cashRevenue + grossRevenueFromInvestments;
-
-  state.history.push({
+  const roundBonus = roundBonusFor();
+  const finalPayout = eliminated ? 0 : Math.round(computedPayout);
+  const netProfit = finalPayout - currentBudget;
+  const ev = events.find(event => event.round === state.round) || events[0];
+  const result = {
     round: state.round,
-    allocations: { ...alloc },
-    investedAmounts,
-    cashReserve,
-    cashMultiplier,
-    cashRevenue,
-    multipliers: flashMults,
-    departmentRevenues: deptRevenues,
-    previousValue: startingBal,
-    newValue: newBalance,
-    change: ((newBalance - startingBal) / startingBal) * 100,
+    allocations,
+    investedAmounts: allocations,
+    departmentRevenues: Object.fromEntries(parameters.map(name => [name, eliminated ? 0 : subsystemResults[name].payout])),
+    subsystemResults,
+    previousValue: currentBudget,
+    newValue: finalPayout,
+    finalPayout,
+    roundBudget: currentBudget,
+    roundBonus,
+    netProfit,
+    eliminated,
+    change: netProfit / currentBudget * 100,
     headline: ev.headline
-  });
-
-  state.companyValue = newBalance;
+  };
+  state.history.push(result);
+  state.companyValue = finalPayout;
+  state.isEliminated = eliminated;
+  trackActivity("round-submitted", `Submitted Flash ${state.round}; reported balance ${money(finalPayout)}.`);
   save();
-  showPage("results");
+  showPage(state.round === 4 ? "leaderboard" : "results");
 }
 
 /* ── 5-Minute Storyline Flash Lock System ─────────────────── */
@@ -646,8 +656,13 @@ function activeEvent() {
       localStorage.removeItem(eventStorageKey());
       return null;
     }
-    const effectiveNow = saved.pausedAt || Date.now();
-    const remaining = saved.startedAt + (saved.duration || EVENT_DURATION_MS) - effectiveNow;
+    // Older saves may have a pause marker from the previous flash behavior. Clear it
+    // and let the five-minute clock continue from the original start time.
+    if (saved.pausedAt) {
+      delete saved.pausedAt;
+      localStorage.setItem(eventStorageKey(), JSON.stringify(saved));
+    }
+    const remaining = saved.startedAt + EVENT_DURATION_MS - Date.now();
     if (remaining <= 0) {
       localStorage.removeItem(eventStorageKey());
       state.flashCompletedRounds = {
@@ -655,6 +670,7 @@ function activeEvent() {
         [ev.round]: true
       };
       state.page = "game";
+      trackActivity("flash-completed", `Completed Flash ${ev.round}.`);
       save();
       return null;
     }
@@ -695,26 +711,11 @@ function syncEventOverlay() {
 
   if (renderedEventId !== event.id) {
     document.querySelector("#flashNumber").textContent = `FLASH ${event.round} OF 04`;
-    document.querySelector("#eventCategory").textContent = event.category;
-    document.querySelector("#eventHeadline").textContent = event.headline;
-    document.querySelector("#eventSubheadline").textContent = event.subheadline;
-    const content = document.querySelector("#eventContent");
-    content.replaceChildren();
-    event.content.split(/\n\n+/).forEach(txt => {
-      const p = document.createElement("p");
-      p.className = "event-story";
-      p.textContent = txt.trim();
-      content.append(p);
-    });
-    document.querySelector("#eventDepartments").textContent = event.affectedDepartments.join(", ");
-    document.querySelector("#eventEffect").textContent = "Read the story carefully to deduce high-multiplier sub-sections!";
-    try {
-      mountMiniGame(document.querySelector("#eventMiniGame"), miniGamesByEvent[event.id] || miniGamesByEvent["flash-1"], event.id);
-    } catch (error) {
-      console.error("Mini game failed to load, keeping flash open:", error);
-      const miniGame = document.querySelector("#eventMiniGame");
-      if (miniGame) miniGame.innerHTML = `<section class="mini-game"><div class="mini-game-head"><span class="article-label">PUZZLE UNAVAILABLE</span><span class="puzzle-status">FLASH TIMER STILL RUNNING</span></div><p class="mini-game-prompt">Continue reading the flash. The story lock remains active.</p></section>`;
-    }
+    const documentFrame = document.querySelector("#eventDocument");
+    const flashUrl = new URL(event.document, location.href);
+    flashUrl.hash = "toolbar=0&navpanes=0&scrollbar=0";
+    documentFrame.src = flashUrl.href;
+    documentFrame.title = `Flash ${event.round} reading document`;
     renderedEventId = event.id;
   }
 
@@ -735,57 +736,13 @@ function startEvent(id) {
     if (existing.event.id === id) syncEventOverlay();
     return;
   }
-  if (state.flashCompletedRounds?.[ev.round]) return;
-
-  const durationMs = (ev.duration || 300) * 1000;
+  const durationMs = EVENT_DURATION_MS;
   state.page = "game";
   localStorage.setItem(eventStorageKey(), JSON.stringify({ id: ev.id, startedAt: Date.now(), duration: durationMs }));
+  trackActivity("flash-started", `Opened Flash ${ev.round}.`);
   save();
   renderedEventId = null;
   syncEventOverlay();
-}
-
-function bypassActiveFlash() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(eventStorageKey()) || "null");
-    const ev = saved && events.find(item => item.id === saved.id);
-    if (!ev) return;
-
-    localStorage.removeItem(eventStorageKey());
-    state.flashCompletedRounds = {
-      ...state.flashCompletedRounds,
-      [ev.round]: true
-    };
-    state.page = "game";
-    save();
-    syncEventOverlay();
-  } catch {
-    localStorage.removeItem(eventStorageKey());
-    syncEventOverlay();
-  }
-}
-
-function pauseActiveEvent() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(eventStorageKey()) || "null");
-    if (!saved || saved.pausedAt) return;
-    saved.pausedAt = Date.now();
-    localStorage.setItem(eventStorageKey(), JSON.stringify(saved));
-  } catch {
-    localStorage.removeItem(eventStorageKey());
-  }
-}
-
-function resumeActiveEvent() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(eventStorageKey()) || "null");
-    if (!saved?.pausedAt) return;
-    saved.startedAt += Date.now() - saved.pausedAt;
-    delete saved.pausedAt;
-    localStorage.setItem(eventStorageKey(), JSON.stringify(saved));
-  } catch {
-    localStorage.removeItem(eventStorageKey());
-  }
 }
 
 function coverFlashContent(covered) {
@@ -799,34 +756,55 @@ document.addEventListener("cut", e => { if (activeEvent()) e.preventDefault(); }
 document.addEventListener("paste", e => { if (activeEvent()) e.preventDefault(); });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
-    pauseActiveEvent();
+    trackActivity("tab-hidden", "Game tab became hidden; this can indicate a tab switch or capture tool.");
     coverFlashContent(true);
   } else {
-    resumeActiveEvent();
     coverFlashContent(false);
     syncEventOverlay();
   }
 });
 window.addEventListener("blur", () => {
-  pauseActiveEvent();
+  document.body.classList.add("screenshot-cover");
+  if (state.teamId && Date.now() - lastBlurActivityAt > 2500) {
+    lastBlurActivityAt = Date.now();
+    trackActivity("window-blur", "Game window lost focus; this can indicate a tab switch or capture tool.");
+  }
   coverFlashContent(true);
 });
 window.addEventListener("focus", () => {
+  document.body.classList.remove("screenshot-cover");
   if (document.hidden) return;
-  resumeActiveEvent();
   coverFlashContent(false);
   syncEventOverlay();
 });
 document.addEventListener("keydown", event => {
-  if (!activeEvent() || event.key !== "PrintScreen") return;
+  const key = event.key.toLowerCase();
+  const screenshotShortcut = event.key === "PrintScreen" || (event.metaKey && event.shiftKey && key === "s");
+  if (!screenshotShortcut) return;
   event.preventDefault();
-  coverFlashContent(true);
-  setTimeout(() => {
-    if (!document.hidden && document.hasFocus()) coverFlashContent(false);
-  }, 1200);
+  trackActivity("screenshot-shortcut", `Detected ${event.key === "PrintScreen" ? "Print Screen" : "Windows/Meta + Shift + S"} shortcut.`);
+  document.body.classList.add("screenshot-cover");
+  setTimeout(() => document.body.classList.remove("screenshot-cover"), 2500);
 }, true);
 
 /* ── Global Event Delegation ─────────────────────────────── */
+document.addEventListener("copy", event => event.preventDefault(), true);
+document.addEventListener("cut", event => event.preventDefault(), true);
+document.addEventListener("paste", event => event.preventDefault(), true);
+document.addEventListener("contextmenu", event => event.preventDefault(), true);
+document.addEventListener("selectstart", event => event.preventDefault(), true);
+document.addEventListener("dragstart", event => event.preventDefault(), true);
+document.addEventListener("keydown", event => {
+  const key = event.key.toLowerCase();
+  const copyPasteShortcut = (event.ctrlKey || event.metaKey) && ["c", "v", "x"].includes(key);
+  const legacyClipboardShortcut = event.ctrlKey && key === "insert"
+    || event.shiftKey && key === "insert";
+  if (copyPasteShortcut || legacyClipboardShortcut) {
+    event.preventDefault();
+    trackActivity("clipboard-shortcut", `Blocked clipboard shortcut: ${key.toUpperCase()}.`);
+  }
+}, true);
+
 document.addEventListener("click", event => {
   const btn = event.target.closest("[data-action]");
   if (!btn) return;
@@ -845,6 +823,8 @@ document.addEventListener("click", event => {
   }
   if (act === "confirm-industry") {
     if (state.pendingIndustry) state.industry = state.pendingIndustry;
+    state.allocations = {};
+    ensureRoundAllocations();
     save();
     showPage("game");
     return;
@@ -856,14 +836,9 @@ document.addEventListener("click", event => {
     return;
   }
 
-  if (act === "bypass-flash") {
-    bypassActiveFlash();
-    return;
-  }
-
   // Download Dataset CSV
   if (act === "download-dataset") {
-    downloadDatasetCSV();
+    downloadRoundDataset();
     return;
   }
 
@@ -875,7 +850,9 @@ document.addEventListener("click", event => {
 
   // Round progression
   if (act === "next-round") {
+    if (state.isEliminated || state.round >= 4) return;
     state.round += 1;
+    trackActivity("round-opened", `Moved to Flash ${state.round}.`);
     save();
     showPage("game");
     return;
@@ -886,16 +863,7 @@ document.addEventListener("click", event => {
     return;
   }
 
-  if (act === "claim-offline-bonus") {
-    const rk = state.round === 3 ? "round3" : "round4";
-    if (!state.offlineBonusClaimed[rk]) {
-      state.companyValue += 15000;
-      state.offlineBonusClaimed[rk] = true;
-      save();
-      render();
-    }
-    return;
-  }
+
 });
 
 // Form submission handler
@@ -914,23 +882,28 @@ document.addEventListener("submit", event => {
   state = savedTeam ? readState(teamStateKey(teamId)) : structuredClone(defaults);
   state.teamId = teamId;
   state.page = savedTeam ? (state.page || "industries") : "industries";
+  trackActivity("team-connected", "Team joined or resumed the simulation.");
   save();
   showPage(state.page);
   syncEventOverlay();
 });
 
-// Input change handler for dollar investments (multiples of $100)
+// Input change handler for rupee investments (minimum ₹1,000 per parameter)
 document.addEventListener("input", event => {
   const an = event.target.dataset.allocation;
   if (an) {
     state.allocations[an] = event.target.value === "" ? 0 : Number(event.target.value);
-    save();
-    const currentCap = state.companyValue;
-    const totalInvested = subDepartments.reduce((sum, d) => sum + Number(state.allocations[d] || 0), 0);
+    scheduleAllocationSave();
+    const currentCap = roundBudget();
+    const totalInvested = roundParameters().reduce((sum, d) => sum + Number(state.allocations[d] || 0), 0);
     const remainingCash = currentCap - totalInvested;
     const v = allocationValid();
+    const investedAmount = document.querySelector("#totalInvestedAmount");
+    const remainingAmount = document.querySelector("#remainingCashAmount");
+    if (investedAmount) investedAmount.textContent = money(totalInvested);
+    if (remainingAmount) remainingAmount.textContent = money(remainingCash);
     const roundReady = Boolean(state.flashCompletedRounds?.[state.round]
-      && state.datasetDownloadedRounds?.[state.round]);
+      && state.datasetDownloadedRounds?.[datasetRoundKey()]);
     const roundSubmitted = state.history.some(result => result.round === state.round);
 
     const msg = document.querySelector("#allocationTotal");
@@ -941,14 +914,14 @@ document.addEventListener("input", event => {
       } else if (!state.flashCompletedRounds?.[state.round]) {
         msg.textContent = "🔒 COMPLETE THE STORYLINE FLASH TO CONTINUE";
         msg.className = "total invalid";
-      } else if (!state.datasetDownloadedRounds?.[state.round]) {
+      } else if (!state.datasetDownloadedRounds?.[datasetRoundKey()]) {
         msg.textContent = `🔒 DOWNLOAD THE ROUND ${state.round} DATASET TO UNLOCK INVESTMENTS`;
         msg.className = "total invalid";
       } else if (v) {
-        msg.textContent = `✅ ALLOCATIONS VALID · $${totalInvested.toLocaleString()} INVESTED, $${remainingCash.toLocaleString()} CASH RESERVE`;
+        msg.textContent = `ALLOCATIONS VALID · ${money(totalInvested)} INVESTED`;
         msg.className = "total valid";
       } else {
-        msg.textContent = `❌ INVALID ALLOCATION · ${investmentRuleText.toUpperCase()} TOTAL CANNOT EXCEED BALANCE ($${currentCap.toLocaleString()})`;
+        msg.textContent = `INVALID · TOTAL MUST EQUAL ${money(currentCap)}; EACH PARAMETER MUST BE AT LEAST ₹1,000`;
         msg.className = "total invalid";
       }
     }
@@ -957,7 +930,23 @@ document.addEventListener("input", event => {
   }
 });
 
+document.addEventListener("change", event => {
+  if (!event.target.dataset.allocation) return;
+  clearTimeout(allocationSaveTimer);
+  allocationSaveTimer = null;
+  persistState();
+  const parameter = event.target.dataset.allocation;
+  trackActivity("allocation-updated", `Set ${parameter} allocation to ${money(state.allocations[parameter])}.`);
+});
+
 /* ── Boot Initializer ────────────────────────────────────── */
 if (!state.page) state = { ...defaults };
 render();
 syncEventOverlay();
+if (state.teamId) {
+  scheduleTeamSync();
+  sendTeamHeartbeat();
+}
+setInterval(syncOrganizerMoney, 2500);
+setInterval(sendTeamHeartbeat, 5000);
+

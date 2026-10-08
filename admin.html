@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f5edda" />
+  <title>Organizer Portal | Data Tycoon</title>
+  <link rel="stylesheet" href="./src/admin.css?v=1" />
+</head>
+<body>
+  <header class="admin-header">
+    <a class="brand" href="./index.html">DATA TYCOON <span>ORGANIZER DESK</span></a>
+    <div id="connectionState" class="connection-state">CONNECTING</div>
+  </header>
+  <main class="admin-main">
+    <section id="loginPanel" class="login-panel">
+      <p class="eyebrow">PRIVATE EVENT CONTROLS</p>
+      <h1>Organizer sign in</h1>
+      <p>Sign in to view live team balances, activity signals, and leaderboard standings.</p>
+      <form id="adminLoginForm">
+        <label for="adminPassword">Organizer password</label>
+        <input id="adminPassword" type="password" autocomplete="current-password" required />
+        <button type="submit">SIGN IN</button>
+      </form>
+      <p id="loginError" class="error" role="alert"></p>
+    </section>
+
+    <section id="dashboard" hidden>
+      <div class="dashboard-heading">
+        <div><p class="eyebrow">LIVE EVENT CONTROL</p><h1>Organizer dashboard</h1><p class="muted">Balances and activity refresh automatically every two seconds.</p></div>
+        <button id="logoutButton" class="button-secondary" type="button">SIGN OUT</button>
+      </div>
+
+      <div class="integrity-note"><strong>Monitoring limits:</strong> the portal records browser-reported focus changes and screenshot shortcuts. Browsers cannot report every OS screenshot method. No screen, camera, or audio is captured.</div>
+
+      <section class="stats-grid" aria-label="Event summary">
+        <article class="stat-card"><span>TEAMS</span><strong id="teamCount">0</strong></article>
+        <article class="stat-card"><span>ONLINE NOW</span><strong id="onlineCount">0</strong></article>
+        <article class="stat-card"><span>FOCUS / SCREEN / CLIPBOARD SIGNALS · 10 MIN</span><strong id="signalCount">0</strong></article>
+        <article class="stat-card"><span>COMBINED TEAM BALANCE</span><strong id="combinedBalance">₹0</strong></article>
+      </section>
+
+      <div class="content-grid">
+        <section class="panel team-panel">
+          <div class="panel-heading"><div><p class="eyebrow">LIVE STANDINGS</p><h2>Leaderboard and balances</h2></div><button id="refreshButton" class="button-secondary" type="button">REFRESH</button></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>TEAM</th><th>INDUSTRY</th><th>ROUND</th><th>BALANCE</th><th>STATUS</th><th>SET BALANCE</th></tr></thead>
+              <tbody id="teamsBody"><tr><td colspan="7" class="empty">Waiting for teams to connect…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel activity-panel">
+          <div class="panel-heading"><div><p class="eyebrow">EVENT INTEGRITY</p><h2>Live activity</h2></div><select id="activityFilter" aria-label="Filter activity"><option value="">All teams</option></select></div>
+          <div id="activityFeed" class="activity-feed"><p class="empty">Waiting for activity…</p></div>
+        </section>
+      </div>
+      <p id="dashboardError" class="error" role="alert"></p>
+      <p class="footer-note">Balance edits apply to the team’s current balance and sync to their browser. Each change is recorded in the activity log.</p>
+    </section>
+  </main>
+  <script>window.DATA_TYCOON_API_BASE = "";</script>
+  <script type="module" src="./src/admin.js?v=4"></script>
+</body>
+</html>

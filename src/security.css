@@ -1,0 +1,7 @@
+body.screenshot-cover::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  background: #000;
+}

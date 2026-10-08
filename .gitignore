@@ -1,6 +1,13 @@
 frontend.zip
 extracted_frontend/
 
+# Organizer credentials and shared event data
+.env
+.env.*
+!.env.example
+server-data.json
+server-data.json.tmp
+
 # Local browser/runtime files
 .env
 .env.*

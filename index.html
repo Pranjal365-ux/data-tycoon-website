@@ -7,9 +7,8 @@
   <title>The Daily Data | Data Tycoon</title>
   <link rel="stylesheet" href="./src/styles.css?v=6" />
   <link rel="stylesheet" href="./src/editorial.css" />
-  <link rel="stylesheet" href="./src/gameflow.css?v=8" />
-  <link rel="stylesheet" href="./src/minigames.css" />
-  <link rel="stylesheet" href="./src/security.css" />
+  <link rel="stylesheet" href="./src/gameflow.css?v=9" />
+  <link rel="stylesheet" href="./src/security.css?v=2" />
 </head>
 <body>
   <div class="paper-frame" id="appRoot">
@@ -21,15 +20,17 @@
     </header>
     <div class="breaking-strip"><b>NEWSROOM WIRE</b><span>MARKETS MOVE · NEWS SPREADS · DECISIONS COMPOUND</span></div>
     <main id="page" class="page" tabindex="-1"></main>
-    <footer>THE DAILY DATA · DATA TYCOON · TECHTATVA '26</footer>
+    <footer>THE DAILY DATA · DATA TYCOON · TECHTATVA '26 · <a href="./admin.html" style="color:inherit">ORGANIZER PORTAL</a></footer>
   </div>
 
-  <div id="newsOverlay" class="news-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="eventHeadline">
-    <article class="news-paper">
-      <div class="flash-bar"><span id="flashNumber">LIVE BULLETIN</span><span>BREAKING NEWS</span><span id="countdown" aria-live="off">05:00</span></div>
-      <div class="flash-body"><p class="article-label" id="eventCategory"></p><h2 id="eventHeadline"></h2><p class="event-subheadline" id="eventSubheadline"></p><div class="flash-reading-grid"><div id="eventContent" class="flash-columns"></div><aside class="flash-aside"><div class="flash-side"><section><h3>AFFECTED DESKS</h3><p id="eventDepartments"></p></section><section><h3>FROM THE MARKET DESK</h3><p id="eventEffect"></p></section></div><div id="eventMiniGame"></div></aside></div><div class="screen-locked">SCREEN LOCKED — LIVE EVENT · TIMER CONTINUES DURING THE PUZZLE</div><button class="temporary-bypass" type="button" data-action="bypass-flash">TEMPORARY TEST OPTION · BYPASS TIMER</button></div>
-    </article>
+  <div id="newsOverlay" class="news-overlay" hidden role="dialog" aria-modal="true" aria-label="Timed round flash">
+    <section class="news-paper flash-document-paper">
+      <div class="flash-bar"><span id="flashNumber">FLASH 1 OF 04</span><span>READ THE ROUND FLASH</span><span id="countdown" aria-live="off">05:00</span></div>
+      <iframe id="eventDocument" class="flash-document-frame" title="Round flash document"></iframe>
+      <div class="screen-locked">SCREEN LOCKED · THIS FLASH ENDS AFTER FIVE MINUTES</div>
+    </section>
   </div>
-  <script type="module" src="./src/app.js?v=11"></script>
+  <script>window.DATA_TYCOON_API_BASE = "";</script>
+  <script type="module" src="./src/app.js?v=28"></script>
 </body>
 </html>
