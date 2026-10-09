@@ -8,19 +8,19 @@ import math
 import os
 import secrets
 import time
-from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Iterator
 from urllib.parse import unquote
 
-import psycopg
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
+from pymongo import DESCENDING, MongoClient
 
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 MAX_ACTIVITIES = 1500
+MONGO_CLIENT: MongoClient | None = None
+MONGO_INDEXES_READY = False
 
 
 def utc_now() -> str:
@@ -35,64 +35,34 @@ def team_key(team_id: str) -> str:
     return clean_text(team_id, 80).casefold()
 
 
-def database_url() -> str:
-    value = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.environ.get("NEON_DATABASE_URL")
+def mongo_database():
+    global MONGO_CLIENT, MONGO_INDEXES_READY
+    value = os.environ.get("MONGODB_URI", "").strip()
     if not value:
-        raise RuntimeError("Set DATABASE_URL in the Vercel project environment variables.")
-    if "sslmode=" not in value:
-        value += ("&" if "?" in value else "?") + "sslmode=require"
-    return value
+        raise RuntimeError("Set MONGODB_URI in the Vercel project environment variables.")
+    if MONGO_CLIENT is None:
+        MONGO_CLIENT = MongoClient(value, serverSelectionTimeoutMS=8000, maxPoolSize=10)
+    database_name = os.environ.get("MONGODB_DATABASE", "data_tycoon").strip() or "data_tycoon"
+    db = MONGO_CLIENT[database_name]
+    if not MONGO_INDEXES_READY:
+        db.data_tycoon_activities.create_index([("teamKey", 1), ("_id", DESCENDING)])
+        MONGO_INDEXES_READY = True
+    return db
 
 
-@contextmanager
-def database() -> Iterator[psycopg.Connection]:
-    connection = psycopg.connect(database_url(), connect_timeout=8)
-    try:
-        connection.execute(
-            """CREATE TABLE IF NOT EXISTS data_tycoon_teams (
-                 team_key TEXT PRIMARY KEY,
-                 team_id TEXT NOT NULL,
-                 payload JSONB NOT NULL
-               )"""
-        )
-        connection.execute(
-            """CREATE TABLE IF NOT EXISTS data_tycoon_activities (
-                 sequence BIGSERIAL PRIMARY KEY,
-                 team_id TEXT NOT NULL,
-                 payload JSONB NOT NULL
-               )"""
-        )
-        connection.execute(
-            "CREATE INDEX IF NOT EXISTS data_tycoon_activities_team_idx ON data_tycoon_activities (lower(team_id), sequence DESC)"
-        )
-        connection.commit()
-        yield connection
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+def load_team(db, key: str) -> dict | None:
+    team = db.data_tycoon_teams.find_one({"_id": key})
+    if team:
+        team.pop("_id", None)
+    return team
 
 
-def load_team(connection: psycopg.Connection, key: str) -> dict | None:
-    row = connection.execute(
-        "SELECT payload FROM data_tycoon_teams WHERE team_key = %s", (key,)
-    ).fetchone()
-    return row[0] if row else None
+def save_team(db, team: dict) -> None:
+    document = {**team, "_id": team_key(team["teamId"])}
+    db.data_tycoon_teams.replace_one({"_id": document["_id"]}, document, upsert=True)
 
 
-def save_team(connection: psycopg.Connection, team: dict) -> None:
-    connection.execute(
-        """INSERT INTO data_tycoon_teams (team_key, team_id, payload)
-           VALUES (%s, %s, %s::jsonb)
-           ON CONFLICT (team_key) DO UPDATE
-           SET team_id = EXCLUDED.team_id, payload = EXCLUDED.payload""",
-        (team_key(team["teamId"]), team["teamId"], json.dumps(team, ensure_ascii=False)),
-    )
-
-
-def append_activity(connection: psycopg.Connection, team_id: str, kind: str, detail: str, actor: str = "team") -> None:
+def append_activity(db, team_id: str, kind: str, detail: str, actor: str = "team") -> None:
     activity = {
         "id": secrets.token_hex(8),
         "teamId": clean_text(team_id, 80),
@@ -101,17 +71,11 @@ def append_activity(connection: psycopg.Connection, team_id: str, kind: str, det
         "actor": actor,
         "timestamp": utc_now(),
     }
-    connection.execute(
-        "INSERT INTO data_tycoon_activities (team_id, payload) VALUES (%s, %s::jsonb)",
-        (activity["teamId"], json.dumps(activity, ensure_ascii=False)),
-    )
-    connection.execute(
-        """DELETE FROM data_tycoon_activities
-           WHERE sequence NOT IN (
-             SELECT sequence FROM data_tycoon_activities ORDER BY sequence DESC LIMIT %s
-           )""",
-        (MAX_ACTIVITIES,),
-    )
+    db.data_tycoon_activities.insert_one({**activity, "teamKey": team_key(activity["teamId"])})
+    old_records = db.data_tycoon_activities.find({}, {"_id": 1}).sort("_id", DESCENDING).skip(MAX_ACTIVITIES)
+    old_ids = [record["_id"] for record in old_records]
+    if old_ids:
+        db.data_tycoon_activities.delete_many({"_id": {"$in": old_ids}})
 
 
 def safe_allocations(value) -> dict:
@@ -201,11 +165,10 @@ async def handle_api(request: Request) -> Response:
 
     if method == "GET" and route == "health":
         try:
-            with database() as connection:
-                connection.execute("SELECT 1")
+            mongo_database().command("ping")
             return json_response({"ok": True, "service": "data-tycoon"})
         except Exception:
-            return json_response({"ok": False, "error": "Database unavailable. Check DATABASE_URL."}, 503)
+            return json_response({"ok": False, "error": "Database unavailable. Check MONGODB_URI."}, 503)
 
     if method == "POST" and route == "admin/login":
         try:
@@ -233,8 +196,8 @@ async def handle_api(request: Request) -> Response:
     if method == "GET" and route.startswith("team/"):
         requested_id = unquote(route[len("team/"):])
         try:
-            with database() as connection:
-                team = load_team(connection, team_key(requested_id))
+            db = mongo_database()
+            team = load_team(db, team_key(requested_id))
             if not team:
                 return json_response({"error": "Team not found."}, 404)
             return json_response({
@@ -243,42 +206,35 @@ async def handle_api(request: Request) -> Response:
                 "moneyRevision": team.get("moneyRevision", 0),
             })
         except Exception:
-            return json_response({"error": "Database unavailable. Check DATABASE_URL."}, 503)
+            return json_response({"error": "Database unavailable. Check MONGODB_URI."}, 503)
 
     if method == "GET" and route == "admin/teams":
         if not admin_authorized(request):
             return json_response({"error": "Organizer sign-in required."}, 401)
         try:
-            with database() as connection:
-                rows = connection.execute("SELECT payload FROM data_tycoon_teams").fetchall()
+            db = mongo_database()
+            rows = list(db.data_tycoon_teams.find({}, {"_id": 0}))
             now = time.time()
             teams = [
-                public_team(row[0]) | {"online": now - float(row[0].get("lastSeenEpoch", 0)) < 20}
+                public_team(row) | {"online": now - float(row.get("lastSeenEpoch", 0)) < 20}
                 for row in rows
             ]
             teams.sort(key=lambda team: (-float(team.get("companyValue", 0)), team.get("teamId", "").casefold()))
             return json_response(teams)
         except Exception:
-            return json_response({"error": "Database unavailable. Check DATABASE_URL."}, 503)
+            return json_response({"error": "Database unavailable. Check MONGODB_URI."}, 503)
 
     if method == "GET" and route == "admin/activities":
         if not admin_authorized(request):
             return json_response({"error": "Organizer sign-in required."}, 401)
         filter_team = request.query_params.get("teamId", "").casefold()
         try:
-            with database() as connection:
-                if filter_team:
-                    rows = connection.execute(
-                        "SELECT payload FROM data_tycoon_activities WHERE lower(team_id) = %s ORDER BY sequence DESC LIMIT 250",
-                        (filter_team,),
-                    ).fetchall()
-                else:
-                    rows = connection.execute(
-                        "SELECT payload FROM data_tycoon_activities ORDER BY sequence DESC LIMIT 250"
-                    ).fetchall()
-            return json_response([row[0] for row in rows])
+            db = mongo_database()
+            query = {"teamKey": filter_team} if filter_team else {}
+            rows = list(db.data_tycoon_activities.find(query, {"_id": 0, "teamKey": 0}).sort("_id", DESCENDING).limit(250))
+            return json_response(rows)
         except Exception:
-            return json_response({"error": "Database unavailable. Check DATABASE_URL."}, 503)
+            return json_response({"error": "Database unavailable. Check MONGODB_URI."}, 503)
 
     if method == "POST":
         try:
@@ -299,40 +255,40 @@ async def handle_api(request: Request) -> Response:
             except (TypeError, ValueError):
                 return json_response({"error": "Invalid team balance or round."}, 400)
             try:
-                with database() as connection:
-                    previous = load_team(connection, team_key(team_id)) or {}
-                    incoming_history = body.get("history") if isinstance(body.get("history"), list) else []
-                    previous_rounds = {item.get("round") for item in previous.get("history", []) if isinstance(item, dict)}
-                    has_new_result = any(
-                        item.get("round") not in previous_rounds for item in incoming_history if isinstance(item, dict)
-                    )
-                    preserve_override = previous.get("adminOverride") and not has_new_result
-                    team = {
-                        **previous,
-                        "teamId": team_id,
-                        "industry": clean_text(body.get("industry"), 80),
-                        "round": round_number,
-                        "companyValue": previous.get("companyValue", balance) if preserve_override else balance,
-                        "allocations": safe_allocations(body.get("allocations")),
-                        "history": [
-                            {
-                                "round": item.get("round"),
-                                "finalPayout": item.get("finalPayout", item.get("newValue", 0)),
-                                "eliminated": bool(item.get("eliminated")),
-                            }
-                            for item in incoming_history if isinstance(item, dict)
-                        ][-4:],
-                        "page": clean_text(body.get("page"), 24),
-                        "isEliminated": bool(body.get("isEliminated")),
-                        "moneyRevision": int(previous.get("moneyRevision", 0)),
-                        "adminOverride": bool(preserve_override),
-                        "updatedAt": utc_now(),
-                        "lastSeenEpoch": time.time(),
-                    }
-                    save_team(connection, team)
+                db = mongo_database()
+                previous = load_team(db, team_key(team_id)) or {}
+                incoming_history = body.get("history") if isinstance(body.get("history"), list) else []
+                previous_rounds = {item.get("round") for item in previous.get("history", []) if isinstance(item, dict)}
+                has_new_result = any(
+                    item.get("round") not in previous_rounds for item in incoming_history if isinstance(item, dict)
+                )
+                preserve_override = previous.get("adminOverride") and not has_new_result
+                team = {
+                    **previous,
+                    "teamId": team_id,
+                    "industry": clean_text(body.get("industry"), 80),
+                    "round": round_number,
+                    "companyValue": previous.get("companyValue", balance) if preserve_override else balance,
+                    "allocations": safe_allocations(body.get("allocations")),
+                    "history": [
+                        {
+                            "round": item.get("round"),
+                            "finalPayout": item.get("finalPayout", item.get("newValue", 0)),
+                            "eliminated": bool(item.get("eliminated")),
+                        }
+                        for item in incoming_history if isinstance(item, dict)
+                    ][-4:],
+                    "page": clean_text(body.get("page"), 24),
+                    "isEliminated": bool(body.get("isEliminated")),
+                    "moneyRevision": int(previous.get("moneyRevision", 0)),
+                    "adminOverride": bool(preserve_override),
+                    "updatedAt": utc_now(),
+                    "lastSeenEpoch": time.time(),
+                }
+                save_team(db, team)
                 return json_response({"team": public_team(team)})
             except Exception:
-                return json_response({"error": "Could not save team. Check DATABASE_URL."}, 503)
+                return json_response({"error": "Could not save team. Check MONGODB_URI."}, 503)
 
         if route == "team/activity":
             team_id = clean_text(body.get("teamId"), 80)
@@ -340,29 +296,29 @@ async def handle_api(request: Request) -> Response:
             if not team_id or not kind:
                 return json_response({"error": "Team and activity type are required."}, 400)
             try:
-                with database() as connection:
-                    append_activity(connection, team_id, kind, clean_text(body.get("detail"), 220))
-                    team = load_team(connection, team_key(team_id))
-                    if team:
-                        team["lastSeenEpoch"] = time.time()
-                        save_team(connection, team)
+                db = mongo_database()
+                append_activity(db, team_id, kind, clean_text(body.get("detail"), 220))
+                team = load_team(db, team_key(team_id))
+                if team:
+                    team["lastSeenEpoch"] = time.time()
+                    save_team(db, team)
                 return json_response({"ok": True}, 202)
             except Exception:
-                return json_response({"error": "Could not save activity. Check DATABASE_URL."}, 503)
+                return json_response({"error": "Could not save activity. Check MONGODB_URI."}, 503)
 
         if route == "team/heartbeat":
             team_id = clean_text(body.get("teamId"), 80)
             if not team_id:
                 return json_response({"error": "A team name is required."}, 400)
             try:
-                with database() as connection:
-                    team = load_team(connection, team_key(team_id))
-                    if team:
-                        team["lastSeenEpoch"] = time.time()
-                        save_team(connection, team)
+                db = mongo_database()
+                team = load_team(db, team_key(team_id))
+                if team:
+                    team["lastSeenEpoch"] = time.time()
+                    save_team(db, team)
                 return json_response({"ok": True})
             except Exception:
-                return json_response({"error": "Could not update team status. Check DATABASE_URL."}, 503)
+                return json_response({"error": "Could not update team status. Check MONGODB_URI."}, 503)
 
     if method == "PATCH" and route.startswith("admin/teams/") and route.endswith("/money"):
         if not admin_authorized(request):
@@ -377,26 +333,26 @@ async def handle_api(request: Request) -> Response:
         requested_id = unquote(route[len("admin/teams/"):-len("/money")])
         key = team_key(requested_id)
         try:
-            with database() as connection:
-                team = load_team(connection, key)
-                if not team:
-                    return json_response({"error": "Team not found."}, 404)
-                old_amount = team["companyValue"]
-                team["companyValue"] = round(amount)
-                team["moneyRevision"] = int(team.get("moneyRevision", 0)) + 1
-                team["adminOverride"] = True
-                team["updatedAt"] = utc_now()
-                append_activity(
-                    connection,
-                    team["teamId"],
-                    "organizer-money-edit",
-                    f"Organizer changed balance from ₹{old_amount:,.0f} to ₹{team['companyValue']:,.0f}.",
-                    "organizer",
-                )
-                save_team(connection, team)
+            db = mongo_database()
+            team = load_team(db, key)
+            if not team:
+                return json_response({"error": "Team not found."}, 404)
+            old_amount = team["companyValue"]
+            team["companyValue"] = round(amount)
+            team["moneyRevision"] = int(team.get("moneyRevision", 0)) + 1
+            team["adminOverride"] = True
+            team["updatedAt"] = utc_now()
+            append_activity(
+                db,
+                team["teamId"],
+                "organizer-money-edit",
+                f"Organizer changed balance from ₹{old_amount:,.0f} to ₹{team['companyValue']:,.0f}.",
+                "organizer",
+            )
+            save_team(db, team)
             return json_response(public_team(team))
         except Exception:
-            return json_response({"error": "Could not update the team balance. Check DATABASE_URL."}, 503)
+            return json_response({"error": "Could not update the team balance. Check MONGODB_URI."}, 503)
 
     if method not in {"GET", "POST", "PATCH", "OPTIONS"}:
         return json_response({"error": "Method not allowed."}, 405)

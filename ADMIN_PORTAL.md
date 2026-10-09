@@ -4,19 +4,20 @@ The organizer portal is available at `/admin.html`. Team balances, leaderboard e
 
 ## Deploy on Vercel
 
-The Vercel deployment uses the Python API in `api/index.py` and a PostgreSQL database. The existing `server.py` and local JSON store remain for local development only; data entered on localhost does not automatically appear in the production database.
+The Vercel deployment uses the Python API in `api/index.py` and MongoDB Atlas. The existing `server.py` and local JSON store remain for local development only; data entered on localhost does not automatically appear in the production database.
 
-1. In the Vercel project, open **Storage** and create or connect a PostgreSQL database (for example, Neon through the Vercel Marketplace).
+1. Create a MongoDB Atlas cluster, database user, and copy the Python driver connection string.
 2. In **Settings → Environment Variables**, ensure these variables are set for **Production**:
    - `ADMIN_PASSWORD`: the organizer login password.
    - `ADMIN_SESSION_SECRET`: a separate long random secret (recommended; if omitted, the API uses `ADMIN_PASSWORD` as the signing secret).
-   - `DATABASE_URL`: the PostgreSQL connection URL from the database provider. `POSTGRES_URL` is also accepted.
+   - `MONGODB_URI`: the Atlas connection string, with the database user's password substituted for the placeholder.
+   - `MONGODB_DATABASE`: the database name, such as `data_tycoon`.
 3. Confirm the project’s Root Directory points to this website folder/repository root, where `vercel.json` and `requirements.txt` are located.
 4. Redeploy the Production deployment after changing environment variables.
-5. Open `https://<your-domain>/api/health`. A working setup returns `{"ok":true,"service":"data-tycoon"}`. If it returns 503, check the database URL and that the database accepts connections.
+5. Open `https://<your-domain>/api/health`. A working setup returns `{"ok":true,"service":"data-tycoon"}`. If it returns 503, check `MONGODB_URI`, Atlas network access, and database user credentials.
 6. Open `https://<your-domain>/admin.html` and sign in with the exact `ADMIN_PASSWORD` value. If you changed it, redeploy again and refresh the page.
 
-Vercel environment changes apply to new deployments, not deployments that are already running. The database tables are created automatically on the first API request. Keep the password, session secret, and database URL private; do not put them in frontend JavaScript or commit `.env`.
+Vercel environment changes apply to new deployments, not deployments that are already running. MongoDB collections and indexes are created automatically on the first API request. Keep the password, session secret, and connection string private; do not put them in frontend JavaScript or commit `.env`.
 
 ## Run locally
 
