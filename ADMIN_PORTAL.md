@@ -4,7 +4,7 @@ The organizer portal is available at `/admin.html`. Team balances, leaderboard e
 
 ## Deploy on Vercel
 
-The Vercel deployment uses the Python API in `api/index.py` and MongoDB Atlas. The existing `server.py` and local JSON store remain for local development only; data entered on localhost does not automatically appear in the production database.
+The Vercel player and organizer portals use the Python API in `api/index.py` and MongoDB Atlas. The player portal restores a team’s saved round state from MongoDB, synchronizes changes and activity back to it, and reads the shared leaderboard from it. A team’s first sign-in sets its PIN; repeat sign-ins must use the same team name and PIN. Team PINs are hashed in the database, and team-specific reads and updates require a signed session token. Existing team records without a PIN receive one when that team first signs in after this feature deploys. The existing `server.py` and local JSON store remain for local development only; data entered on localhost does not automatically appear in the production database.
 
 1. Create a MongoDB Atlas cluster, database user, and copy the Python driver connection string.
 2. In **Settings → Environment Variables**, ensure these variables are set for **Production**:

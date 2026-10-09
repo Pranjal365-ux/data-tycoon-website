@@ -191,6 +191,18 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 "companyValue": team["companyValue"],
                 "moneyRevision": team.get("moneyRevision", 0),
             })
+        if path == "/api/leaderboard":
+            with STORE_LOCK:
+                teams = list(read_store()["teams"].values())
+            leaderboard = [{
+                "teamId": team.get("teamId", ""),
+                "industry": team.get("industry", ""),
+                "round": team.get("round", 1),
+                "companyValue": team.get("companyValue", 0),
+                "isEliminated": bool(team.get("isEliminated")),
+            } for team in teams]
+            leaderboard.sort(key=lambda team: (-float(team.get("companyValue", 0)), team["teamId"].casefold()))
+            return self.send_json(200, leaderboard)
         if path == "/api/admin/teams":
             if not self.admin_authorized():
                 return

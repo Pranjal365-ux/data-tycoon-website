@@ -18,6 +18,7 @@ from pymongo import DESCENDING, MongoClient
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+TEAM_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 MAX_ACTIVITIES = 1500
 MONGO_CLIENT: MongoClient | None = None
 MONGO_INDEXES_READY = False
@@ -92,8 +93,31 @@ def safe_allocations(value) -> dict:
     return result
 
 
+def safe_boolean_map(value, limit: int = 20) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    return {clean_text(key, 120): bool(flag) for key, flag in list(value.items())[:limit]}
+
+
+def safe_active_flash(value) -> dict | None:
+    if not isinstance(value, dict) or value.get("id") not in {f"flash-{round_number}" for round_number in range(1, 5)}:
+        return None
+    try:
+        started_at = int(value.get("startedAt"))
+        duration = int(value.get("duration", 300_000))
+    except (TypeError, ValueError):
+        return None
+    if started_at <= 0 or duration < 1 or duration > 300_000:
+        return None
+    return {"id": value["id"], "startedAt": started_at, "duration": duration}
+
+
 def public_team(team: dict) -> dict:
-    return {key: value for key, value in team.items() if key != "adminOverride"}
+    return {key: value for key, value in team.items() if key not in {"adminOverride", "pinSalt", "pinHash"}}
+
+
+def player_team(team: dict) -> dict:
+    return public_team(team)
 
 
 def session_secret() -> str:
@@ -119,7 +143,42 @@ def token_is_valid(token: str) -> bool:
         claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
     except (ValueError, json.JSONDecodeError):
         return False
-    return hmac.compare_digest(expected, supplied) and claims.get("exp", 0) > time.time()
+    return hmac.compare_digest(expected, supplied) and claims.get("exp", 0) > time.time() and claims.get("scope") != "team"
+
+
+def issue_team_token(key: str) -> str:
+    payload = base64.urlsafe_b64encode(json.dumps({
+        "exp": int(time.time()) + 30 * 24 * 60 * 60,
+        "scope": "team",
+        "teamKey": key,
+        "nonce": secrets.token_hex(8),
+    }).encode()).decode().rstrip("=")
+    signature = hmac.new(session_secret().encode(), payload.encode(), hashlib.sha256).digest()
+    return payload + "." + base64.urlsafe_b64encode(signature).decode().rstrip("=")
+
+
+def team_token_is_valid(token: str, key: str) -> bool:
+    if not token or "." not in token or not session_secret():
+        return False
+    payload, supplied_signature = token.split(".", 1)
+    expected = hmac.new(session_secret().encode(), payload.encode(), hashlib.sha256).digest()
+    try:
+        supplied = base64.urlsafe_b64decode(supplied_signature + "=" * (-len(supplied_signature) % 4))
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (ValueError, json.JSONDecodeError):
+        return False
+    return (
+        hmac.compare_digest(expected, supplied)
+        and claims.get("scope") == "team"
+        and claims.get("teamKey") == key
+        and claims.get("exp", 0) > time.time()
+    )
+
+
+def team_authorized(request: Request, team_id: str) -> bool:
+    header = request.headers.get("authorization", "")
+    token = header[5:] if header.startswith("Team ") else ""
+    return team_token_is_valid(token, team_key(team_id))
 
 
 def admin_authorized(request: Request) -> bool:
@@ -163,6 +222,62 @@ async def handle_api(request: Request) -> Response:
             "Cache-Control": "no-store",
         })
 
+    if method == "POST" and route == "team/connect":
+        try:
+            body = await request_json(request)
+        except (ValueError, json.JSONDecodeError) as error:
+            return json_response({"error": str(error)}, 400)
+        team_id = clean_text(body.get("teamId"), 80)
+        pin = str(body.get("pin", ""))
+        if not team_id or len(pin) < 4 or len(pin) > 64:
+            return json_response({"error": "Enter a team name and a PIN between 4 and 64 characters."}, 400)
+        if not session_secret():
+            return json_response({"error": "Organizer session secret is not configured."}, 503)
+        forwarded_for = request.headers.get("x-forwarded-for", "")
+        client_ip = forwarded_for.split(",", 1)[0].strip() or (request.client.host if request.client else "unknown")
+        now = time.time()
+        attempts = [timestamp for timestamp in TEAM_LOGIN_ATTEMPTS.get(client_ip, []) if now - timestamp < 60]
+        if len(attempts) >= 8:
+            TEAM_LOGIN_ATTEMPTS[client_ip] = attempts
+            return json_response({"error": "Too many team sign-in attempts. Wait a minute and try again."}, 429)
+        key = team_key(team_id)
+        try:
+            db = mongo_database()
+            team = load_team(db, key)
+            if team and team.get("pinHash"):
+                salt = bytes.fromhex(team.get("pinSalt", ""))
+                candidate = hashlib.pbkdf2_hmac("sha256", pin.encode(), salt, 260_000).hex()
+                if not hmac.compare_digest(candidate, team["pinHash"]):
+                    attempts.append(now)
+                    TEAM_LOGIN_ATTEMPTS[client_ip] = attempts
+                    return json_response({"error": "Incorrect team PIN."}, 401)
+            else:
+                team = team or {
+                    "teamId": team_id,
+                    "industry": "",
+                    "round": 1,
+                    "companyValue": 1_000_000,
+                    "allocations": {},
+                    "history": [],
+                    "page": "industries",
+                    "isEliminated": False,
+                    "moneyRevision": 0,
+                    "flashCompletedRounds": {},
+                    "datasetDownloadedRounds": {},
+                    "offlineBonusClaimed": {"round3": False, "round4": False},
+                    "round2GrantApplied": False,
+                }
+                salt = secrets.token_bytes(16)
+                team["pinSalt"] = salt.hex()
+                team["pinHash"] = hashlib.pbkdf2_hmac("sha256", pin.encode(), salt, 260_000).hex()
+                team["updatedAt"] = utc_now()
+                team["lastSeenEpoch"] = now
+                save_team(db, team)
+            TEAM_LOGIN_ATTEMPTS.pop(client_ip, None)
+            return json_response({"token": issue_team_token(key), "team": player_team(team)})
+        except Exception:
+            return json_response({"error": "Could not connect to the team database. Check MONGODB_URI."}, 503)
+
     if method == "GET" and route == "health":
         try:
             mongo_database().command("ping")
@@ -195,18 +310,28 @@ async def handle_api(request: Request) -> Response:
 
     if method == "GET" and route.startswith("team/"):
         requested_id = unquote(route[len("team/"):])
+        if not team_authorized(request, requested_id):
+            return json_response({"error": "Team sign-in required. Enter the team PIN again."}, 401)
         try:
             db = mongo_database()
             team = load_team(db, team_key(requested_id))
             if not team:
                 return json_response({"error": "Team not found."}, 404)
-            return json_response({
-                "teamId": team["teamId"],
-                "companyValue": team["companyValue"],
-                "moneyRevision": team.get("moneyRevision", 0),
-            })
+            return json_response(player_team(team))
         except Exception:
             return json_response({"error": "Database unavailable. Check MONGODB_URI."}, 503)
+
+    if method == "GET" and route == "leaderboard":
+        try:
+            db = mongo_database()
+            rows = db.data_tycoon_teams.find(
+                {}, {"_id": 0, "teamId": 1, "industry": 1, "round": 1, "companyValue": 1, "isEliminated": 1}
+            )
+            teams = list(rows)
+            teams.sort(key=lambda team: (-float(team.get("companyValue", 0)), team.get("teamId", "").casefold()))
+            return json_response(teams)
+        except Exception:
+            return json_response({"error": "Could not load the leaderboard. Check MONGODB_URI."}, 503)
 
     if method == "GET" and route == "admin/teams":
         if not admin_authorized(request):
@@ -246,6 +371,8 @@ async def handle_api(request: Request) -> Response:
             team_id = clean_text(body.get("teamId"), 80)
             if not team_id:
                 return json_response({"error": "A team name is required."}, 400)
+            if not team_authorized(request, team_id):
+                return json_response({"error": "Team sign-in required. Enter the team PIN again."}, 401)
             try:
                 round_number = max(1, min(4, int(body.get("round", 1))))
                 balance = float(body.get("companyValue", 0))
@@ -271,11 +398,7 @@ async def handle_api(request: Request) -> Response:
                     "companyValue": previous.get("companyValue", balance) if preserve_override else balance,
                     "allocations": safe_allocations(body.get("allocations")),
                     "history": [
-                        {
-                            "round": item.get("round"),
-                            "finalPayout": item.get("finalPayout", item.get("newValue", 0)),
-                            "eliminated": bool(item.get("eliminated")),
-                        }
+                        item
                         for item in incoming_history if isinstance(item, dict)
                     ][-4:],
                     "page": clean_text(body.get("page"), 24),
@@ -284,6 +407,16 @@ async def handle_api(request: Request) -> Response:
                     "adminOverride": bool(preserve_override),
                     "updatedAt": utc_now(),
                     "lastSeenEpoch": time.time(),
+                    "pendingIndustry": clean_text(body.get("pendingIndustry"), 80),
+                    "scoringVersion": 2,
+                    "allocationRound": max(1, min(4, int(body.get("allocationRound", round_number)))),
+                    "allocationBudget": max(0, min(10**12, float(body.get("allocationBudget", 0)))),
+                    "allocationSetupVersion": int(body.get("allocationSetupVersion", 0)),
+                    "flashCompletedRounds": safe_boolean_map(body.get("flashCompletedRounds")),
+                    "datasetDownloadedRounds": safe_boolean_map(body.get("datasetDownloadedRounds")),
+                    "offlineBonusClaimed": safe_boolean_map(body.get("offlineBonusClaimed")),
+                    "round2GrantApplied": bool(body.get("round2GrantApplied")),
+                    "activeFlash": safe_active_flash(body.get("activeFlash")),
                 }
                 save_team(db, team)
                 return json_response({"team": public_team(team)})
@@ -295,6 +428,8 @@ async def handle_api(request: Request) -> Response:
             kind = clean_text(body.get("kind"), 48)
             if not team_id or not kind:
                 return json_response({"error": "Team and activity type are required."}, 400)
+            if not team_authorized(request, team_id):
+                return json_response({"error": "Team sign-in required. Enter the team PIN again."}, 401)
             try:
                 db = mongo_database()
                 append_activity(db, team_id, kind, clean_text(body.get("detail"), 220))
@@ -310,6 +445,8 @@ async def handle_api(request: Request) -> Response:
             team_id = clean_text(body.get("teamId"), 80)
             if not team_id:
                 return json_response({"error": "A team name is required."}, 400)
+            if not team_authorized(request, team_id):
+                return json_response({"error": "Team sign-in required. Enter the team PIN again."}, 401)
             try:
                 db = mongo_database()
                 team = load_team(db, team_key(team_id))

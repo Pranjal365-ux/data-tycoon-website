@@ -1,7 +1,7 @@
 ﻿import { industries } from "./data/industries.js";
 import { datasetFor, parametersByIndustry, payoutMultipliers } from "./data/round-rules.js";
 import { EVENT_DURATION_MS, events } from "./data/events.js";
-import { getLeaderboard, getTeamRank, updateTeamInLeaderboard } from "./data/leaderboard.js";
+import { getLeaderboard, getTeamRank, replaceLeaderboard, updateTeamInLeaderboard } from "./data/leaderboard.js";
 
 /* ── Keys & State Defaults ───────────────────────────────── */
 const STATE_KEY = "data-tycoon-game-v5";
@@ -46,6 +46,7 @@ let allocationSaveTimer = null;
 let teamSyncTimer = null;
 let remoteMoneyPollBusy = false;
 let lastBlurActivityAt = 0;
+let teamLoginNotice = "";
 
 /* ── Persistence ─────────────────────────────────────────── */
 function loadState() {
@@ -62,6 +63,15 @@ function teamStateKey(teamId) {
 
 function eventStorageKey(teamId = state.teamId) {
   return `${EVENT_KEY_PREFIX}-${teamSlug(teamId)}`;
+}
+
+function savedActiveFlash(teamId = state.teamId) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(eventStorageKey(teamId)) || "null");
+    return saved && typeof saved === "object" ? saved : null;
+  } catch {
+    return null;
+  }
 }
 
 function readState(key) {
@@ -85,13 +95,43 @@ function readState(key) {
 
 function apiBase() {
   const host = location.hostname.toLowerCase();
-  const localPage = location.protocol === "file:" || host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-  const fallback = localPage ? "http://127.0.0.1:8000/api" : `${location.origin}/api`;
+  const localHost = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  const vercelDev = localHost && location.port === "3000";
+  const fallback = localHost && !vercelDev ? "http://127.0.0.1:8000/api" : `${location.origin}/api`;
   return String(window.DATA_TYCOON_API_BASE || fallback).replace(/\/$/, "");
 }
 
+function usesLegacyLocalApi() {
+  const host = location.hostname.toLowerCase();
+  const localHost = host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+  return location.protocol === "file:" || (localHost && location.port !== "3000");
+}
+
+function teamTokenKey(teamId = state.teamId) {
+  const normalized = String(teamId || "").trim().replace(/\s+/g, " ").slice(0, 80).toLowerCase();
+  return `data-tycoon-team-token-${normalized}`;
+}
+
+function teamAuthHeaders(teamId = state.teamId) {
+  const token = localStorage.getItem(teamTokenKey(teamId));
+  return token ? { Authorization: `Team ${token}` } : {};
+}
+
+function hasTeamSession(teamId = state.teamId) {
+  return usesLegacyLocalApi() || Boolean(localStorage.getItem(teamTokenKey(teamId)));
+}
+
+function expireTeamSession() {
+  if (!state.teamId || usesLegacyLocalApi()) return;
+  localStorage.removeItem(teamTokenKey());
+  teamLoginNotice = "Your team session expired. Enter the team PIN to reconnect and continue.";
+  state.page = "login";
+  persistState({ sync: false });
+  render();
+}
+
 function scheduleTeamSync() {
-  if (!state.teamId) return;
+  if (!state.teamId || !hasTeamSession()) return;
   clearTimeout(teamSyncTimer);
   teamSyncTimer = setTimeout(() => {
     teamSyncTimer = null;
@@ -103,15 +143,28 @@ function scheduleTeamSync() {
       moneyRevision: state.moneyRevision || 0,
       allocations: state.allocations,
       history: state.history,
+      pendingIndustry: state.pendingIndustry,
+      allocationRound: state.allocationRound,
+      allocationBudget: state.allocationBudget,
+      allocationSetupVersion: state.allocationSetupVersion,
+      flashCompletedRounds: state.flashCompletedRounds,
+      datasetDownloadedRounds: state.datasetDownloadedRounds,
+      offlineBonusClaimed: state.offlineBonusClaimed,
+      round2GrantApplied: state.round2GrantApplied,
+      activeFlash: savedActiveFlash(),
       page: state.page,
       isEliminated: state.isEliminated
     };
     fetch(`${apiBase()}/team/sync`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...teamAuthHeaders() },
       body: JSON.stringify(snapshot),
       keepalive: true
     }).then(response => {
+      if (response.status === 401) {
+        expireTeamSession();
+        throw new Error("Team session expired; sign in with the team PIN again.");
+      }
       if (!response.ok) throw new Error(`Team sync failed (${response.status})`);
     }).catch(error => {
       console.warn("Data Tycoon could not sync this team to the organizer server; retrying.", error);
@@ -175,20 +228,24 @@ function scheduleAllocationSave() {
 }
 
 function trackActivity(kind, detail) {
-  if (!state.teamId) return;
+  if (!state.teamId || !hasTeamSession()) return;
   fetch(`${apiBase()}/team/activity`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...teamAuthHeaders() },
     body: JSON.stringify({ teamId: state.teamId, kind, detail }),
     keepalive: true
   }).catch(() => {});
 }
 
 async function syncOrganizerMoney() {
-  if (!state.teamId || remoteMoneyPollBusy) return;
+  if (!state.teamId || !hasTeamSession() || remoteMoneyPollBusy) return;
   remoteMoneyPollBusy = true;
   try {
-    const response = await fetch(`${apiBase()}/team/${encodeURIComponent(state.teamId)}`, { cache: "no-store" });
+    const response = await fetch(`${apiBase()}/team/${encodeURIComponent(state.teamId)}`, {
+      cache: "no-store",
+      headers: teamAuthHeaders()
+    });
+    if (response.status === 401) { expireTeamSession(); return; }
     if (!response.ok) return;
     const remote = await response.json();
     if (Number(remote.moneyRevision || 0) <= Number(state.moneyRevision || 0)) return;
@@ -205,14 +262,49 @@ async function syncOrganizerMoney() {
   }
 }
 
+async function refreshSharedLeaderboard() {
+  try {
+    const response = await fetch(`${apiBase()}/leaderboard`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Leaderboard request failed (${response.status})`);
+    const teams = await response.json();
+    const before = JSON.stringify(getLeaderboard());
+    replaceLeaderboard(teams);
+    if (state.page === "leaderboard" && before !== JSON.stringify(getLeaderboard())) render();
+  } catch (error) {
+    console.warn("Could not load the shared leaderboard; showing this browser's saved copy.", error);
+  }
+}
+
+async function loadRemoteTeam(teamId) {
+  const runningLocally = usesLegacyLocalApi();
+  const pin = document.querySelector("#pin").value;
+  const response = runningLocally
+    ? await fetch(`${apiBase()}/team/${encodeURIComponent(teamId)}`, { cache: "no-store" })
+    : await fetch(`${apiBase()}/team/connect`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ teamId, pin }),
+      cache: "no-store"
+    });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok && response.status === 404 && runningLocally) return null;
+  if (!response.ok) throw new Error(payload.error || `Could not connect to team (${response.status})`);
+  if (!runningLocally) {
+    if (!payload.token || !payload.team) throw new Error("The team sign-in response was incomplete.");
+    localStorage.setItem(teamTokenKey(teamId), payload.token);
+    return payload.team;
+  }
+  return payload;
+}
+
 async function sendTeamHeartbeat() {
-  if (!state.teamId) return;
+  if (!state.teamId || !hasTeamSession()) return;
   fetch(`${apiBase()}/team/heartbeat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...teamAuthHeaders() },
     body: JSON.stringify({ teamId: state.teamId }),
     keepalive: true
-  }).catch(() => {});
+  }).then(response => { if (response.status === 401) expireTeamSession(); }).catch(() => {});
 }
 
 function showPage(id) {
@@ -307,7 +399,9 @@ function renderLogin() {
       <label for="teamId">Team ID / Name</label>
       <input class="text-input" id="teamId" name="teamId" required placeholder="Enter your Team Name (e.g. Team Alpha)" value="${esc(state.teamId)}">
       <label for="pin">Access PIN</label>
-      <input class="text-input" id="pin" name="pin" type="password" required placeholder="Enter PIN">
+      <input class="text-input" id="pin" name="pin" type="password" required minlength="4" maxlength="64" autocomplete="current-password" placeholder="Create a PIN or enter your team PIN">
+      <small>First sign-in sets the team PIN. Returning teammates must use the same team name and PIN.</small>
+      ${teamLoginNotice ? `<p id="teamConnectionError" role="alert">${esc(teamLoginNotice)}</p>` : ""}
       <button type="submit">ENTER THE NEWSROOM</button>
     </form>
   </section>`;
@@ -669,7 +763,7 @@ function activeEvent() {
         ...state.flashCompletedRounds,
         [ev.round]: true
       };
-      state.page = "game";
+      state.page = hasTeamSession() ? "game" : "login";
       trackActivity("flash-completed", `Completed Flash ${ev.round}.`);
       save();
       return null;
@@ -859,7 +953,7 @@ document.addEventListener("click", event => {
   }
 
   if (act === "refresh-leaderboard") {
-    render();
+    refreshSharedLeaderboard();
     return;
   }
 
@@ -867,25 +961,69 @@ document.addEventListener("click", event => {
 });
 
 // Form submission handler
-document.addEventListener("submit", event => {
+document.addEventListener("submit", async event => {
   if (event.target.id !== "loginForm") return;
   event.preventDefault();
-  const teamId = new FormData(event.target).get("teamId").trim() || "Team Alpha";
+  const formData = new FormData(event.target);
+  const teamId = formData.get("teamId").trim() || "Team Alpha";
+  const submitButton = event.target.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  submitButton.textContent = "CONNECTING…";
 
-  if (timer) { clearInterval(timer); timer = null; }
-  renderedEventId = null;
-  document.body.classList.remove("anti-cheat-cover");
+  try {
+    teamLoginNotice = "";
+    const remoteTeam = await loadRemoteTeam(teamId);
 
-  if (state.teamId) save();
-  localStorage.setItem("data-tycoon-active-team", teamSlug(teamId));
-  const savedTeam = localStorage.getItem(teamStateKey(teamId));
-  state = savedTeam ? readState(teamStateKey(teamId)) : structuredClone(defaults);
-  state.teamId = teamId;
-  state.page = savedTeam ? (state.page || "industries") : "industries";
-  trackActivity("team-connected", "Team joined or resumed the simulation.");
-  save();
-  showPage(state.page);
-  syncEventOverlay();
+    if (timer) { clearInterval(timer); timer = null; }
+    renderedEventId = null;
+    document.body.classList.remove("anti-cheat-cover");
+
+    if (state.teamId && hasTeamSession()) save();
+    localStorage.setItem("data-tycoon-active-team", teamSlug(teamId));
+    const savedTeam = localStorage.getItem(teamStateKey(teamId));
+    state = savedTeam ? readState(teamStateKey(teamId)) : structuredClone(defaults);
+    if (remoteTeam) {
+      const browserHistory = state.history;
+      const restoredHistory = (remoteTeam.history || []).map(remoteResult => {
+        const localResult = browserHistory.find(result => result.round === remoteResult.round && result.subsystemResults);
+        return localResult ? { ...localResult, ...remoteResult, subsystemResults: localResult.subsystemResults } : remoteResult;
+      });
+      state = {
+        ...state,
+        ...remoteTeam,
+        history: restoredHistory,
+        // Progress stored on the server is authoritative; defaults fill older saved records.
+        flashCompletedRounds: remoteTeam.flashCompletedRounds ?? state.flashCompletedRounds,
+        datasetDownloadedRounds: remoteTeam.datasetDownloadedRounds ?? state.datasetDownloadedRounds,
+        offlineBonusClaimed: remoteTeam.offlineBonusClaimed ?? state.offlineBonusClaimed
+      };
+      if (Object.hasOwn(remoteTeam, "activeFlash")) {
+        if (remoteTeam.activeFlash) {
+          localStorage.setItem(eventStorageKey(teamId), JSON.stringify(remoteTeam.activeFlash));
+        } else {
+          localStorage.removeItem(eventStorageKey(teamId));
+        }
+      }
+    }
+    state.teamId = remoteTeam?.teamId || teamId;
+    state.page = remoteTeam?.page || (savedTeam ? (state.page || "industries") : "industries");
+    if (state.page === "login") state.page = "industries";
+    trackActivity("team-connected", "Team joined or resumed the simulation.");
+    save();
+    showPage(state.page);
+    syncEventOverlay();
+  } catch (error) {
+    let message = document.querySelector("#teamConnectionError");
+    if (!message) {
+      message = document.createElement("p");
+      message.id = "teamConnectionError";
+      message.setAttribute("role", "alert");
+      event.target.append(message);
+    }
+    message.textContent = `Could not connect to the event database: ${error.message}. Please try again.`;
+    submitButton.disabled = false;
+    submitButton.textContent = "ENTER THE NEWSROOM";
+  }
 });
 
 // Input change handler for rupee investments (minimum ₹1,000 per parameter)
@@ -941,12 +1079,15 @@ document.addEventListener("change", event => {
 
 /* ── Boot Initializer ────────────────────────────────────── */
 if (!state.page) state = { ...defaults };
+if (state.teamId && !hasTeamSession()) state.page = "login";
 render();
 syncEventOverlay();
 if (state.teamId) {
   scheduleTeamSync();
   sendTeamHeartbeat();
 }
+refreshSharedLeaderboard();
+setInterval(refreshSharedLeaderboard, 5000);
 setInterval(syncOrganizerMoney, 2500);
 setInterval(sendTeamHeartbeat, 5000);
 
