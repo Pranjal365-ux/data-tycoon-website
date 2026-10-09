@@ -858,28 +858,34 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 window.addEventListener("blur", () => {
-  document.body.classList.add("screenshot-cover");
   if (state.teamId && Date.now() - lastBlurActivityAt > 2500) {
     lastBlurActivityAt = Date.now();
     trackActivity("window-blur", "Game window lost focus; this can indicate a tab switch or capture tool.");
   }
-  coverFlashContent(true);
 });
 window.addEventListener("focus", () => {
-  document.body.classList.remove("screenshot-cover");
   if (document.hidden) return;
-  coverFlashContent(false);
   syncEventOverlay();
 });
 document.addEventListener("keydown", event => {
   const key = event.key.toLowerCase();
+  const printShortcut = (event.ctrlKey || event.metaKey) && key === "p";
   const screenshotShortcut = event.key === "PrintScreen" || (event.metaKey && event.shiftKey && key === "s");
-  if (!screenshotShortcut) return;
+  if (!printShortcut && !screenshotShortcut) return;
   event.preventDefault();
-  trackActivity("screenshot-shortcut", `Detected ${event.key === "PrintScreen" ? "Print Screen" : "Windows/Meta + Shift + S"} shortcut.`);
-  document.body.classList.add("screenshot-cover");
-  setTimeout(() => document.body.classList.remove("screenshot-cover"), 2500);
+  if (activeEvent()) {
+    trackActivity(
+      printShortcut ? "print-shortcut" : "screenshot-shortcut",
+      printShortcut
+        ? "Detected a print or save-as-PDF shortcut during a flash."
+        : `Detected ${event.key === "PrintScreen" ? "Print Screen" : "Windows/Meta + Shift + S"} shortcut.`
+    );
+  }
 }, true);
+
+window.addEventListener("beforeprint", () => {
+  if (activeEvent()) trackActivity("print-dialog", "The browser opened its print dialog during a flash.");
+});
 
 /* ── Global Event Delegation ─────────────────────────────── */
 document.addEventListener("copy", event => event.preventDefault(), true);

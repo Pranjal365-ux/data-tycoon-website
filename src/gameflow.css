@@ -74,6 +74,7 @@
 .news-paper.flash-document-paper{height:94vh;max-height:94vh;overflow:hidden;display:flex;flex-direction:column;padding:clamp(10px,2vw,22px)}
 .flash-document-frame{display:block;flex:1 1 auto;width:100%;min-height:0;margin-top:12px;border:1px solid var(--rule);background:#fff}
 .flash-document-paper .screen-locked{flex:0 0 auto;text-align:center;margin:10px 0 0;padding-top:10px}
+.flash-document-paper,.flash-document-paper *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 .event-launcher{border-block:3px double var(--ink);background:#e5decc;padding:12px 14px;margin:0 0 18px}
 .event-launcher-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:9px}
 .event-launcher-head>span:last-child{font:8px "DM Mono",monospace;letter-spacing:.08em;color:var(--muted)}

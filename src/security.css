@@ -1,7 +1,8 @@
-body.screenshot-cover::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 2147483647;
-  background: #000;
+/* Browser printing is blocked at the page level, including the browser's Save as PDF path. */
+@media print {
+  html,
+  body {
+    display: none !important;
+    visibility: hidden !important;
+  }
 }
