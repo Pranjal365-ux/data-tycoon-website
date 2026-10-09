@@ -21,6 +21,8 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 TEAM_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 MAX_ACTIVITIES = 1500
+ACTIVITY_PRUNE_EVERY = 100
+ACTIVITY_WRITES_SINCE_PRUNE = 0
 MONGO_CLIENT: MongoClient | None = None
 MONGO_INDEXES_READY = False
 
@@ -48,6 +50,7 @@ def mongo_database():
     db = MONGO_CLIENT[database_name]
     if not MONGO_INDEXES_READY:
         db.data_tycoon_activities.create_index([("teamKey", 1), ("_id", DESCENDING)])
+        db.data_tycoon_teams.create_index([("companyValue", DESCENDING), ("teamId", 1)], name="leaderboard_value_team")
         MONGO_INDEXES_READY = True
     return db
 
@@ -65,6 +68,7 @@ def save_team(db, team: dict) -> None:
 
 
 def append_activity(db, team_id: str, kind: str, detail: str, actor: str = "team") -> None:
+    global ACTIVITY_WRITES_SINCE_PRUNE
     activity = {
         "id": secrets.token_hex(8),
         "teamId": clean_text(team_id, 80),
@@ -74,6 +78,10 @@ def append_activity(db, team_id: str, kind: str, detail: str, actor: str = "team
         "timestamp": utc_now(),
     }
     db.data_tycoon_activities.insert_one({**activity, "teamKey": team_key(activity["teamId"])})
+    ACTIVITY_WRITES_SINCE_PRUNE += 1
+    if ACTIVITY_WRITES_SINCE_PRUNE < ACTIVITY_PRUNE_EVERY:
+        return
+    ACTIVITY_WRITES_SINCE_PRUNE = 0
     old_records = db.data_tycoon_activities.find({}, {"_id": 1}).sort("_id", DESCENDING).skip(MAX_ACTIVITIES)
     old_ids = [record["_id"] for record in old_records]
     if old_ids:
@@ -343,6 +351,21 @@ async def handle_api(request: Request) -> Response:
         LOGIN_ATTEMPTS.pop(client_ip, None)
         return json_response({"token": issue_token(), "expiresIn": 8 * 60 * 60})
 
+    if method == "GET" and route.startswith("team/") and route.endswith("/balance"):
+        requested_id = unquote(route[len("team/"):-len("/balance")])
+        if not team_authorized(request, requested_id):
+            return json_response({"error": "Team sign-in required. Enter the team PIN again."}, 401)
+        try:
+            row = mongo_database().data_tycoon_teams.find_one(
+                {"_id": team_key(requested_id)},
+                {"_id": 0, "companyValue": 1, "moneyRevision": 1},
+            )
+            if not row:
+                return json_response({"error": "Team not found."}, 404)
+            return json_response(row)
+        except Exception:
+            return json_response({"error": "Database unavailable. Check MONGODB_URI."}, 503)
+
     if method == "GET" and route.startswith("team/"):
         requested_id = unquote(route[len("team/"):])
         if not team_authorized(request, requested_id):
@@ -359,27 +382,57 @@ async def handle_api(request: Request) -> Response:
     if method == "GET" and route == "leaderboard":
         try:
             db = mongo_database()
-            rows = db.data_tycoon_teams.find(
+            teams = list(db.data_tycoon_teams.find(
                 {}, {"_id": 0, "teamId": 1, "industry": 1, "round": 1, "companyValue": 1, "isEliminated": 1}
-            )
-            teams = list(rows)
-            teams.sort(key=lambda team: (-float(team.get("companyValue", 0)), team.get("teamId", "").casefold()))
+            ).sort([("companyValue", DESCENDING), ("teamId", 1)]))
             return json_response(teams)
         except Exception:
             return json_response({"error": "Could not load the leaderboard. Check MONGODB_URI."}, 503)
+
+    if method == "GET" and route == "admin/dashboard":
+        if not admin_authorized(request):
+            return json_response({"error": "Organizer sign-in required."}, 401)
+        filter_team = request.query_params.get("teamId", "").casefold()
+        try:
+            db = mongo_database()
+            now = time.time()
+            team_projection = {
+                "_id": 0, "teamId": 1, "industry": 1, "round": 1,
+                "companyValue": 1, "isEliminated": 1, "lastSeenEpoch": 1,
+            }
+            rows = db.data_tycoon_teams.find({}, team_projection).sort(
+                [("companyValue", DESCENDING), ("teamId", 1)]
+            )
+            teams = [
+                dict(row, online=now - float(row.get("lastSeenEpoch", 0)) < 45)
+                for row in rows
+            ]
+            query = {"teamKey": filter_team} if filter_team else {}
+            activities = list(
+                db.data_tycoon_activities.find(query, {"_id": 0, "teamKey": 0})
+                .sort("_id", DESCENDING)
+                .limit(100)
+            )
+            return json_response({"teams": teams, "activities": activities})
+        except Exception:
+            return json_response({"error": "Database unavailable. Check MONGODB_URI."}, 503)
 
     if method == "GET" and route == "admin/teams":
         if not admin_authorized(request):
             return json_response({"error": "Organizer sign-in required."}, 401)
         try:
             db = mongo_database()
-            rows = list(db.data_tycoon_teams.find({}, {"_id": 0}))
+            projection = {
+                "_id": 0, "teamId": 1, "industry": 1, "round": 1,
+                "companyValue": 1, "isEliminated": 1, "lastSeenEpoch": 1,
+            }
             now = time.time()
             teams = [
-                public_team(row) | {"online": now - float(row.get("lastSeenEpoch", 0)) < 20}
-                for row in rows
+                dict(row, online=now - float(row.get("lastSeenEpoch", 0)) < 45)
+                for row in db.data_tycoon_teams.find({}, projection).sort(
+                    [("companyValue", DESCENDING), ("teamId", 1)]
+                )
             ]
-            teams.sort(key=lambda team: (-float(team.get("companyValue", 0)), team.get("teamId", "").casefold()))
             return json_response(teams)
         except Exception:
             return json_response({"error": "Database unavailable. Check MONGODB_URI."}, 503)
@@ -468,10 +521,9 @@ async def handle_api(request: Request) -> Response:
             try:
                 db = mongo_database()
                 append_activity(db, team_id, kind, clean_text(body.get("detail"), 220))
-                team = load_team(db, team_key(team_id))
-                if team:
-                    team["lastSeenEpoch"] = time.time()
-                    save_team(db, team)
+                db.data_tycoon_teams.update_one(
+                    {"_id": team_key(team_id)}, {"$set": {"lastSeenEpoch": time.time()}}
+                )
                 return json_response({"ok": True}, 202)
             except Exception:
                 return json_response({"error": "Could not save activity. Check MONGODB_URI."}, 503)
@@ -484,10 +536,9 @@ async def handle_api(request: Request) -> Response:
                 return json_response({"error": "Team sign-in required. Enter the team PIN again."}, 401)
             try:
                 db = mongo_database()
-                team = load_team(db, team_key(team_id))
-                if team:
-                    team["lastSeenEpoch"] = time.time()
-                    save_team(db, team)
+                db.data_tycoon_teams.update_one(
+                    {"_id": team_key(team_id)}, {"$set": {"lastSeenEpoch": time.time()}}
+                )
                 return json_response({"ok": True})
             except Exception:
                 return json_response({"error": "Could not update team status. Check MONGODB_URI."}, 503)

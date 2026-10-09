@@ -139,12 +139,9 @@ async function refreshDashboard() {
   if (!getToken() || refreshBusy) return;
   refreshBusy = true;
   try {
-    const [teams, activities] = await Promise.all([
-      api("/admin/teams"),
-      api(`/admin/activities${activityFilter.value ? `?teamId=${encodeURIComponent(activityFilter.value)}` : ""}`)
-    ]);
-    renderTeams(teams);
-    renderActivities(activities);
+    const dashboard = await api(`/admin/dashboard${activityFilter.value ? `?teamId=${encodeURIComponent(activityFilter.value)}` : ""}`);
+    renderTeams(dashboard.teams || []);
+    renderActivities(dashboard.activities || []);
     connectionState.textContent = "LIVE";
     connectionState.classList.remove("offline");
     dashboardError.textContent = "";
@@ -154,7 +151,7 @@ async function refreshDashboard() {
     dashboardError.textContent = `${error.message} (API: ${API_BASE})`;
   } finally {
     refreshBusy = false;
-    if (getToken()) refreshTimer = setTimeout(refreshDashboard, 2000);
+    if (getToken()) refreshTimer = setTimeout(refreshDashboard, 5000);
   }
 }
 

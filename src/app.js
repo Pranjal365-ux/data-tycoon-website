@@ -242,7 +242,7 @@ async function syncOrganizerMoney() {
   if (!state.teamId || !hasTeamSession() || remoteMoneyPollBusy) return;
   remoteMoneyPollBusy = true;
   try {
-    const response = await fetch(`${apiBase()}/team/${encodeURIComponent(state.teamId)}`, {
+    const response = await fetch(`${apiBase()}/team/${encodeURIComponent(state.teamId)}/balance`, {
       cache: "no-store",
       headers: teamAuthHeaders()
     });
@@ -312,6 +312,7 @@ function showPage(id) {
   state.page = id;
   save();
   render();
+  if (id === "leaderboard") refreshSharedLeaderboard();
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -1095,8 +1096,10 @@ if (state.teamId) {
   scheduleTeamSync();
   sendTeamHeartbeat();
 }
-refreshSharedLeaderboard();
-setInterval(refreshSharedLeaderboard, 5000);
-setInterval(syncOrganizerMoney, 2500);
-setInterval(sendTeamHeartbeat, 5000);
+if (state.page === "leaderboard") refreshSharedLeaderboard();
+setInterval(() => {
+  if (state.page === "leaderboard") refreshSharedLeaderboard();
+}, 15000);
+setInterval(syncOrganizerMoney, 8000);
+setInterval(sendTeamHeartbeat, 15000);
 
