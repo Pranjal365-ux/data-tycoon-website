@@ -53,13 +53,14 @@ def utc_now() -> str:
 
 def read_store() -> dict:
     if not DATA_PATH.exists():
-        return {"teams": {}, "activities": []}
+        return {"teams": {}, "activities": [], "settings": {}}
     try:
         data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ValueError("store root must be an object")
         data.setdefault("teams", {})
         data.setdefault("activities", [])
+        data.setdefault("settings", {})
         return data
     except (OSError, json.JSONDecodeError, ValueError) as error:
         raise RuntimeError(f"Could not read {DATA_PATH.name}: {error}") from error
@@ -180,6 +181,24 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
             return super().do_GET()
         if path == "/api/health":
             return self.send_json(200, {"ok": True, "service": "data-tycoon"})
+        if path == "/api/settings/flash-timer":
+            with STORE_LOCK:
+                setting = read_store().get("settings", {}).get("flashTimer", {})
+            return self.send_json(200, {
+                "enabled": bool(setting.get("enabled", False)),
+                "changedAt": int(setting.get("changedAt", 0)),
+            })
+        if path.startswith("/api/team/") and path.endswith("/balance"):
+            requested_id = unquote(path[len("/api/team/"):-len("/balance")])
+            with STORE_LOCK:
+                team = read_store()["teams"].get(team_key(requested_id))
+            if not team:
+                return self.send_json(404, {"error": "Team not found."})
+            return self.send_json(200, {
+                "teamId": team["teamId"],
+                "companyValue": team["companyValue"],
+                "moneyRevision": team.get("moneyRevision", 0),
+            })
         if path.startswith("/api/team/"):
             requested_id = unquote(path[len("/api/team/"):])
             with STORE_LOCK:
@@ -215,6 +234,28 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
             ]
             teams.sort(key=lambda team: (-float(team.get("companyValue", 0)), team.get("teamId", "").casefold()))
             return self.send_json(200, teams)
+        if path == "/api/admin/dashboard":
+            if not self.admin_authorized():
+                return
+            query = parse_qs(parsed.query)
+            filter_team = query.get("teamId", [""])[0].casefold()
+            with STORE_LOCK:
+                data = read_store()
+            now = time.time()
+            teams = [
+                public_team(team) | {"online": now - max(team.get("lastSeenEpoch", 0), LAST_SEEN.get(team_key(team["teamId"]), 0)) < 45}
+                for team in data["teams"].values()
+            ]
+            teams.sort(key=lambda team: (-float(team.get("companyValue", 0)), team.get("teamId", "").casefold()))
+            activities = data["activities"]
+            if filter_team:
+                activities = [item for item in activities if item.get("teamId", "").casefold() == filter_team]
+            timer = data.get("settings", {}).get("flashTimer", {})
+            return self.send_json(200, {
+                "teams": teams,
+                "activities": activities[-100:][::-1],
+                "flashTimer": {"enabled": bool(timer.get("enabled", False)), "changedAt": int(timer.get("changedAt", 0))},
+            })
         if path == "/api/admin/activities":
             if not self.admin_authorized():
                 return
@@ -325,8 +366,27 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
         return self.send_json(404, {"error": "API route not found."})
 
     def do_PATCH(self):
-        prefix = "/api/admin/teams/"
         path = urlparse(self.path).path
+        if path == "/api/admin/settings/flash-timer":
+            if not self.admin_authorized():
+                return
+            try:
+                body = self.read_json()
+            except (ValueError, json.JSONDecodeError) as error:
+                return self.send_json(400, {"error": str(error)})
+            enabled = body.get("enabled")
+            if not isinstance(enabled, bool):
+                return self.send_json(400, {"error": "Timer enabled must be true or false."})
+            with STORE_LOCK:
+                data = read_store()
+                settings = data.setdefault("settings", {})
+                previous = settings.get("flashTimer", {})
+                changed_at = int(time.time() * 1000) if bool(previous.get("enabled", False)) != enabled else int(previous.get("changedAt", 0))
+                settings["flashTimer"] = {"enabled": enabled, "changedAt": changed_at}
+                write_store(data)
+            return self.send_json(200, settings["flashTimer"])
+
+        prefix = "/api/admin/teams/"
         if not path.startswith(prefix) or not path.endswith("/money"):
             return self.send_json(404, {"error": "API route not found."})
         if not self.admin_authorized():

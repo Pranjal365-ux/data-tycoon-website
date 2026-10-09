@@ -139,6 +139,11 @@ def team_pin_matches(team: dict, pin: str) -> bool:
         return False
 
 
+def flash_timer_settings(db) -> dict:
+    row = db.data_tycoon_settings.find_one({"_id": "flash-timer"}) or {}
+    return {"enabled": bool(row.get("enabled", False)), "changedAt": int(row.get("changedAt", 0))}
+
+
 def session_secret() -> str:
     return os.environ.get("ADMIN_SESSION_SECRET") or os.environ.get("ADMIN_PASSWORD", "")
 
@@ -328,6 +333,12 @@ async def handle_api(request: Request) -> Response:
         except Exception:
             return json_response({"ok": False, "error": "Database unavailable. Check MONGODB_URI."}, 503)
 
+    if method == "GET" and route == "settings/flash-timer":
+        try:
+            return json_response(flash_timer_settings(mongo_database()))
+        except Exception:
+            return json_response({"error": "Could not load flash timer settings."}, 503)
+
     if method == "POST" and route == "admin/login":
         try:
             body = await request_json(request)
@@ -413,7 +424,7 @@ async def handle_api(request: Request) -> Response:
                 .sort("_id", DESCENDING)
                 .limit(100)
             )
-            return json_response({"teams": teams, "activities": activities})
+            return json_response({"teams": teams, "activities": activities, "flashTimer": flash_timer_settings(db)})
         except Exception:
             return json_response({"error": "Database unavailable. Check MONGODB_URI."}, 503)
 
@@ -542,6 +553,29 @@ async def handle_api(request: Request) -> Response:
                 return json_response({"ok": True})
             except Exception:
                 return json_response({"error": "Could not update team status. Check MONGODB_URI."}, 503)
+
+    if method == "PATCH" and route == "admin/settings/flash-timer":
+        if not admin_authorized(request):
+            return json_response({"error": "Organizer sign-in required."}, 401)
+        try:
+            body = await request_json(request)
+        except (ValueError, json.JSONDecodeError) as error:
+            return json_response({"error": str(error)}, 400)
+        enabled = body.get("enabled")
+        if not isinstance(enabled, bool):
+            return json_response({"error": "Timer enabled must be true or false."}, 400)
+        try:
+            db = mongo_database()
+            existing = db.data_tycoon_settings.find_one({"_id": "flash-timer"}) or {}
+            changed_at = int(time.time() * 1000) if bool(existing.get("enabled", False)) != enabled else int(existing.get("changedAt", 0))
+            db.data_tycoon_settings.update_one(
+                {"_id": "flash-timer"},
+                {"$set": {"enabled": enabled, "changedAt": changed_at}},
+                upsert=True,
+            )
+            return json_response({"enabled": enabled, "changedAt": changed_at})
+        except Exception:
+            return json_response({"error": "Could not update flash timer settings."}, 503)
 
     if method == "PATCH" and route.startswith("admin/teams/") and route.endswith("/money"):
         if not admin_authorized(request):

@@ -49,6 +49,9 @@ let teamSyncTimer = null;
 let remoteMoneyPollBusy = false;
 let lastBlurActivityAt = 0;
 let teamLoginNotice = "";
+let flashTimerSettings = { enabled: true, changedAt: 0 };
+let flashTimerSettingsLoaded = false;
+let flashTimerSettingsBusy = false;
 
 /* ── Persistence ─────────────────────────────────────────── */
 function loadState() {
@@ -238,6 +241,30 @@ function trackActivity(kind, detail) {
     body: JSON.stringify({ teamId: state.teamId, kind, detail }),
     keepalive: true
   }).catch(() => {});
+}
+
+async function refreshFlashTimerSettings() {
+  if (flashTimerSettingsBusy) return;
+  flashTimerSettingsBusy = true;
+  const wasLoaded = flashTimerSettingsLoaded;
+  try {
+    const response = await fetch(`${apiBase()}/settings/flash-timer`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Flash timer settings request failed (${response.status})`);
+    const nextSettings = await response.json();
+    if (typeof nextSettings.enabled !== "boolean") throw new Error("Flash timer setting is invalid.");
+    const changed = flashTimerSettings.enabled !== nextSettings.enabled
+      || flashTimerSettings.changedAt !== Number(nextSettings.changedAt || 0);
+    flashTimerSettings = { enabled: nextSettings.enabled, changedAt: Number(nextSettings.changedAt || 0) };
+    flashTimerSettingsLoaded = true;
+    if (!wasLoaded || changed) syncEventOverlay();
+  } catch {
+    if (!flashTimerSettingsLoaded) {
+      flashTimerSettingsLoaded = true;
+      syncEventOverlay();
+    }
+  } finally {
+    flashTimerSettingsBusy = false;
+  }
 }
 
 async function syncOrganizerMoney() {
@@ -504,7 +531,7 @@ function renderGame() {
     <span class="article-label" style="color:var(--red)">ROUND INSTRUCTIONS</span><h3 style="margin:8px 0 12px">HOW TO PLAY THIS ROUND</h3>
     ${roundBonusFor() ? `<p style="font-weight:bold;color:var(--green)">Previous round balance: ${money(roundBudget() - roundBonusFor())} + Flash ${state.round} bonus: ${money(roundBonusFor())}.</p>` : state.round > 1 ? `<p style="font-weight:bold;color:var(--green)">Carried forward from the previous round: ${money(roundBudget())}.</p>` : ""}
     <ol style="font-size:12px;line-height:1.8;margin:0;padding-left:20px">
-    <li>Open the round flash whenever needed; every opening starts a five-minute screen lock.</li>
+    <li>Read the round flash. The organizer can switch its five-minute lock on or off during the event.</li>
       <li>Download the official dataset for this industry and round.</li>
       <li>Allocate exactly ${money(currentCap)} across the ten parameters, with at least ₹1,000 in each.</li>
       <li>Submit to calculate your payout and round score.</li>
@@ -513,9 +540,9 @@ function renderGame() {
   <section style="border:2px solid var(--red);background:#fdf2f0;padding:20px;margin-bottom:24px;text-align:center">
     <span class="article-label" style="color:var(--red);font-size:11px">MANDATORY STORYLINE FLASH · ROUND ${state.round}</span>
     <h2 style="font-family:'Playfair Display',serif;font-size:24px;margin:10px 0 6px">ROUND ${state.round} FLASH</h2>
-    <p style="font-size:13px;color:#555;max-width:700px;margin:0 auto 16px">Every time you open this flash, your screen will be locked for five minutes. You can reopen it after the timer ends.</p>
+    <p style="font-size:13px;color:#555;max-width:700px;margin:0 auto 16px">The organizer controls the five-minute flash timer. When it is off, you can close the flash manually.</p>
     <button data-action="open-flash" style="background:var(--red);border-color:var(--red);color:white;padding:16px 32px;font-size:13px;letter-spacing:.12em">
-      OPEN FLASH · START 5-MINUTE LOCK
+      OPEN FLASH
     </button>
   </section>
   <section class="analysis-card" style="margin-bottom:24px;text-align:center;padding:24px">
@@ -757,13 +784,15 @@ function activeEvent() {
       localStorage.removeItem(eventStorageKey());
       return null;
     }
-    // Older saves may have a pause marker from the previous flash behavior. Clear it
-    // and let the five-minute clock continue from the original start time.
+    // Older saves may contain a pause marker from a previous flash behavior.
     if (saved.pausedAt) {
       delete saved.pausedAt;
       localStorage.setItem(eventStorageKey(), JSON.stringify(saved));
     }
-    const remaining = saved.startedAt + EVENT_DURATION_MS - Date.now();
+    if (!flashTimerSettingsLoaded) return { ...saved, event: ev, remaining: EVENT_DURATION_MS };
+    if (!flashTimerSettings.enabled) return { ...saved, event: ev, remaining: 0 };
+    const timerStartedAt = Math.max(Number(saved.startedAt) || 0, flashTimerSettings.changedAt);
+    const remaining = timerStartedAt + EVENT_DURATION_MS - Date.now();
     if (remaining <= 0) {
       localStorage.removeItem(eventStorageKey());
       state.flashCompletedRounds = {
@@ -819,15 +848,22 @@ function syncEventOverlay() {
     renderedEventId = event.id;
   }
 
-  document.querySelector("#countdown").textContent = formatCountdown(active.remaining);
+  const timerEnabled = !flashTimerSettingsLoaded || flashTimerSettings.enabled;
+  document.querySelector("#countdown").textContent = timerEnabled ? formatCountdown(active.remaining) : "TIMER OFF";
+  document.querySelector("#flashTimerNotice").textContent = timerEnabled
+    ? "SCREEN LOCKED · THIS FLASH ENDS AFTER FIVE MINUTES"
+    : "TIMER OFF · CLOSE THIS FLASH WHEN YOU ARE READY";
+  document.querySelector("#finishFlashButton").hidden = timerEnabled;
   overlay.hidden = false;
   overlay.removeAttribute("hidden");
   overlay.style.display = "grid";
 
-  if (!timer) timer = setInterval(syncEventOverlay, 200);
+  if (timerEnabled && !timer) timer = setInterval(syncEventOverlay, 200);
+  else if (!timerEnabled && timer) { clearInterval(timer); timer = null; }
 }
 
-function startEvent(id) {
+async function startEvent(id) {
+  await refreshFlashTimerSettings();
   const ev = events.find(e => e.id === id);
   if (!ev) return;
 
@@ -842,6 +878,18 @@ function startEvent(id) {
   trackActivity("flash-started", `Opened Flash ${ev.round}.`);
   save();
   renderedEventId = null;
+  syncEventOverlay();
+}
+
+function finishFlashManually() {
+  if (!flashTimerSettingsLoaded || flashTimerSettings.enabled) return;
+  const active = activeEvent();
+  if (!active) return;
+  localStorage.removeItem(eventStorageKey());
+  state.flashCompletedRounds = { ...state.flashCompletedRounds, [active.event.round]: true };
+  state.page = "game";
+  trackActivity("flash-completed", `Completed Flash ${active.event.round} after manually closing while the timer was off.`);
+  save();
   syncEventOverlay();
 }
 
@@ -945,6 +993,10 @@ document.addEventListener("click", event => {
   if (act === "open-flash") {
     event.preventDefault();
     startEvent(`flash-${state.round}`);
+    return;
+  }
+  if (act === "finish-flash") {
+    finishFlashManually();
     return;
   }
 
@@ -1111,6 +1163,10 @@ if (!state.page) state = { ...defaults };
 if (state.teamId && !hasTeamSession()) state.page = "login";
 render();
 syncEventOverlay();
+refreshFlashTimerSettings();
+setInterval(() => {
+  if (state.teamId && savedActiveFlash()) refreshFlashTimerSettings();
+}, 5000);
 if (state.teamId) {
   scheduleTeamSync();
   sendTeamHeartbeat();

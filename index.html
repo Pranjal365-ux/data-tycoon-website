@@ -7,7 +7,7 @@
   <title>The Daily Data | Data Tycoon</title>
   <link rel="stylesheet" href="./src/styles.css?v=6" />
   <link rel="stylesheet" href="./src/editorial.css" />
-  <link rel="stylesheet" href="./src/gameflow.css?v=10" />
+  <link rel="stylesheet" href="./src/gameflow.css?v=11" />
   <link rel="stylesheet" href="./src/security.css?v=3" />
 </head>
 <body>
@@ -27,10 +27,11 @@
     <section class="news-paper flash-document-paper">
       <div class="flash-bar"><span id="flashNumber">FLASH 1 OF 04</span><span>READ THE ROUND FLASH</span><span id="countdown" aria-live="off">05:00</span></div>
       <div id="eventDocument" class="flash-document-frame" role="document" aria-label="Round flash document"></div>
-      <div class="screen-locked">SCREEN LOCKED · THIS FLASH ENDS AFTER FIVE MINUTES</div>
+      <div id="flashTimerNotice" class="screen-locked">SCREEN LOCKED · THIS FLASH ENDS AFTER FIVE MINUTES</div>
+      <button id="finishFlashButton" class="flash-finish-button" type="button" data-action="finish-flash" hidden>DONE READING · RETURN TO ROUND</button>
     </section>
   </div>
   <script>window.DATA_TYCOON_API_BASE = "";</script>
-  <script type="module" src="./src/app.js?v=33"></script>
+  <script type="module" src="./src/app.js?v=34"></script>
 </body>
 </html>

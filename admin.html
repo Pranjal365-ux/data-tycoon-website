@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#f5edda" />
   <title>Organizer Portal | Data Tycoon</title>
-  <link rel="stylesheet" href="./src/admin.css?v=1" />
+  <link rel="stylesheet" href="./src/admin.css?v=2" />
 </head>
 <body>
   <header class="admin-header">
@@ -27,11 +27,16 @@
 
     <section id="dashboard" hidden>
       <div class="dashboard-heading">
-        <div><p class="eyebrow">LIVE EVENT CONTROL</p><h1>Organizer dashboard</h1><p class="muted">Balances and activity refresh automatically every two seconds.</p></div>
+        <div><p class="eyebrow">LIVE EVENT CONTROL</p><h1>Organizer dashboard</h1><p class="muted">Balances and activity refresh automatically every five seconds.</p></div>
         <button id="logoutButton" class="button-secondary" type="button">SIGN OUT</button>
       </div>
 
       <div class="integrity-note"><strong>Monitoring limits:</strong> the portal records browser-reported focus changes and screenshot shortcuts. Browsers cannot report every OS screenshot method. No screen, camera, or audio is captured.</div>
+
+      <section class="panel flash-timer-control" aria-labelledby="flashTimerHeading">
+        <div><p class="eyebrow">ROUND ACCESS CONTROL</p><h2 id="flashTimerHeading">Flash timer</h2><p id="flashTimerDescription" class="muted">Loading current timer setting…</p></div>
+        <div class="flash-timer-action"><strong id="flashTimerStatus">LOADING</strong><button id="flashTimerToggle" class="button-secondary" type="button" disabled>LOADING</button></div>
+      </section>
 
       <section class="stats-grid" aria-label="Event summary">
         <article class="stat-card"><span>TEAMS</span><strong id="teamCount">0</strong></article>
@@ -61,6 +66,6 @@
     </section>
   </main>
   <script>window.DATA_TYCOON_API_BASE = "";</script>
-  <script type="module" src="./src/admin.js?v=5"></script>
+  <script type="module" src="./src/admin.js?v=6"></script>
 </body>
 </html>

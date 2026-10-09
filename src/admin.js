@@ -12,10 +12,14 @@ const connectionState = document.querySelector("#connectionState");
 const teamsBody = document.querySelector("#teamsBody");
 const activityFeed = document.querySelector("#activityFeed");
 const activityFilter = document.querySelector("#activityFilter");
+const flashTimerStatus = document.querySelector("#flashTimerStatus");
+const flashTimerDescription = document.querySelector("#flashTimerDescription");
+const flashTimerToggle = document.querySelector("#flashTimerToggle");
 let refreshBusy = false;
 let refreshTimer = null;
 let lastTeamsSnapshot = "";
 let lastActivitiesSnapshot = "";
+let flashTimerEnabled = null;
 
 const money = amount => `₹${Math.round(Number(amount) || 0).toLocaleString("en-IN")}`;
 const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -77,6 +81,39 @@ loginForm.addEventListener("submit", async event => {
 document.querySelector("#logoutButton").addEventListener("click", signOut);
 document.querySelector("#refreshButton").addEventListener("click", refreshDashboard);
 activityFilter.addEventListener("change", refreshDashboard);
+
+function renderFlashTimer(setting) {
+  if (typeof setting?.enabled !== "boolean") return;
+  flashTimerEnabled = setting.enabled;
+  flashTimerStatus.textContent = flashTimerEnabled ? "ON · FIVE-MINUTE LOCK" : "OFF · MANUAL CLOSE";
+  flashTimerStatus.classList.toggle("off", !flashTimerEnabled);
+  flashTimerDescription.textContent = flashTimerEnabled
+    ? "Players are timed while reading a flash. Turning this off lets them close it manually."
+    : "Players can read each flash and close it manually. Turn the five-minute lock back on whenever needed.";
+  flashTimerToggle.textContent = flashTimerEnabled ? "TURN TIMER OFF" : "TURN TIMER ON";
+  flashTimerToggle.setAttribute("aria-pressed", String(flashTimerEnabled));
+  flashTimerToggle.disabled = false;
+}
+
+flashTimerToggle.addEventListener("click", async () => {
+  if (typeof flashTimerEnabled !== "boolean") return;
+  flashTimerToggle.disabled = true;
+  dashboardError.textContent = "";
+  try {
+    const setting = await api("/admin/settings/flash-timer", {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: !flashTimerEnabled })
+    });
+    renderFlashTimer(setting);
+    dashboardError.textContent = setting.enabled
+      ? "Flash timer enabled. Open flashes will start a fresh five-minute countdown."
+      : "Flash timer disabled. Players can close open flashes manually.";
+  } catch (error) {
+    dashboardError.textContent = error.message;
+  } finally {
+    flashTimerToggle.disabled = false;
+  }
+});
 
 function renderTeams(teams) {
   const snapshot = JSON.stringify(teams);
@@ -142,6 +179,7 @@ async function refreshDashboard() {
     const dashboard = await api(`/admin/dashboard${activityFilter.value ? `?teamId=${encodeURIComponent(activityFilter.value)}` : ""}`);
     renderTeams(dashboard.teams || []);
     renderActivities(dashboard.activities || []);
+    renderFlashTimer(dashboard.flashTimer);
     connectionState.textContent = "LIVE";
     connectionState.classList.remove("offline");
     dashboardError.textContent = "";

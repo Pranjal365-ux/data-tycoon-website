@@ -76,6 +76,7 @@
 .flash-rendered-page{display:grid;place-items:center;min-height:70vh;padding:10px;background:#fff;border-bottom:1px solid var(--rule);color:var(--muted);font:10px "DM Mono",monospace}
 .flash-rendered-page canvas{display:block;max-width:100%;height:auto;box-shadow:0 2px 12px #29282322}
 .flash-document-paper .screen-locked{flex:0 0 auto;text-align:center;margin:10px 0 0;padding-top:10px}
+.flash-finish-button{align-self:center;margin-top:10px;background:#23652c;border-color:#23652c}
 .flash-document-paper,.flash-document-paper *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 .event-launcher{border-block:3px double var(--ink);background:#e5decc;padding:12px 14px;margin:0 0 18px}
 .event-launcher-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:9px}
