@@ -280,7 +280,7 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 team = {
                     **previous,
                     "teamId": team_id,
-                    "industry": clean_text(body.get("industry"), 80),
+                    "industry": clean_text(previous.get("industry"), 80) or clean_text(body.get("industry"), 80),
                     "round": round_number,
                     "companyValue": next_balance,
                     "allocations": safe_allocations(body.get("allocations")),

@@ -481,7 +481,7 @@ async def handle_api(request: Request) -> Response:
                 team = {
                     **previous,
                     "teamId": team_id,
-                    "industry": clean_text(body.get("industry"), 80),
+                    "industry": clean_text(previous.get("industry"), 80) or clean_text(body.get("industry"), 80),
                     "round": round_number,
                     "companyValue": previous.get("companyValue", balance) if preserve_override else balance,
                     "allocations": safe_allocations(body.get("allocations")),

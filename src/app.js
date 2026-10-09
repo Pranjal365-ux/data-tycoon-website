@@ -24,6 +24,7 @@ const defaults = {
   teamId: "",
   industry: null,
   pendingIndustry: null,
+  resumePage: "industries",
   round: 1,
   scoringVersion: 2,
   companyValue: BASE_ROUND_BUDGET,
@@ -126,6 +127,7 @@ function expireTeamSession() {
   if (!state.teamId || usesLegacyLocalApi()) return;
   localStorage.removeItem(teamTokenKey());
   teamLoginNotice = "Your team session expired. Enter the team PIN to reconnect and continue.";
+  if (state.page !== "login") state.resumePage = state.page;
   state.page = "login";
   persistState({ sync: false });
   render();
@@ -153,7 +155,7 @@ function scheduleTeamSync() {
       offlineBonusClaimed: state.offlineBonusClaimed,
       round2GrantApplied: state.round2GrantApplied,
       activeFlash: savedActiveFlash(),
-      page: state.page,
+      page: state.page === "login" ? (state.resumePage || "industries") : state.page,
       isEliminated: state.isEliminated
     };
     fetch(`${apiBase()}/team/sync`, {
@@ -309,6 +311,8 @@ async function sendTeamHeartbeat() {
 }
 
 function showPage(id) {
+  if (id === "login" && state.page !== "login") state.resumePage = state.page;
+  if (id === "industries" && state.industry) id = "game";
   state.page = id;
   save();
   render();
@@ -403,6 +407,7 @@ function renderLogin() {
       <label for="pin">Access PIN</label>
       <input class="text-input" id="pin" name="pin" type="password" required minlength="4" maxlength="64" autocomplete="current-password" placeholder="Create a PIN or enter your team PIN">
       <small>First sign-in sets the team PIN. Returning teammates must use the same team name and PIN.</small>
+      <small>Your saved round will resume after sign-in. A confirmed industry stays locked for your team.</small>
       ${teamLoginNotice ? `<p id="teamConnectionError" role="alert">${esc(teamLoginNotice)}</p>` : ""}
       <button type="submit">ENTER THE NEWSROOM</button>
     </form>
@@ -413,13 +418,13 @@ function renderLogin() {
 function renderIndustries() {
   const sel = state.pendingIndustry || state.industry;
   return `${shellHeading("STEP 1", "SELECT YOUR INDUSTRY DESK")}
-  <p class="intro-copy">Choose 1 industry for your company. You can change your choice anytime before submitting Round 1 investments.</p>
+  <p class="intro-copy">Choose one industry for your company. Confirming your choice locks it for all four rounds.</p>
   <div class="selection-strip">
     <div>
       <strong>${sel ? `SELECTED: ${esc(sel.toUpperCase())}` : "NO INDUSTRY SELECTED YET"}</strong>
       <span>${sel ? "CLICK CONFIRM TO OPEN YOUR DASHBOARD" : "CHOOSE AN INDUSTRY BELOW"}</span>
     </div>
-    <button data-action="confirm-industry" ${sel ? "" : "disabled"}>CONFIRM & PROCEED TO DASHBOARD ➔</button>
+    <button data-action="confirm-industry" ${state.industry || !sel ? "disabled" : ""}>${state.industry ? "INDUSTRY LOCKED" : "CONFIRM & PROCEED TO DASHBOARD ➔"}</button>
   </div>
   <div class="article-grid">
     ${industries.map((ind, i) => {
@@ -431,7 +436,7 @@ function renderIndustries() {
         </div>
         <h3>${esc(ind.name)}</h3>
         <p>${esc(ind.description)}</p>
-        <button class="choice-button ${isSelected ? "ghost" : ""}" data-action="select-industry" data-industry="${esc(ind.name)}">
+        <button class="choice-button ${isSelected ? "ghost" : ""}" data-action="select-industry" data-industry="${esc(ind.name)}" ${state.industry ? "disabled" : ""}>
           ${isSelected ? "✓ SELECTED" : "CHOOSE THIS INDUSTRY"}
         </button>
       </article>`;
@@ -919,14 +924,17 @@ document.addEventListener("click", event => {
   if (act === "nav") { showPage(btn.dataset.page); return; }
 
   if (act === "select-industry") {
+    if (state.industry) return;
     state.pendingIndustry = btn.dataset.industry;
-    state.industry = btn.dataset.industry;
     save();
     render();
     return;
   }
   if (act === "confirm-industry") {
+    if (state.industry) { showPage("game"); return; }
     if (state.pendingIndustry) state.industry = state.pendingIndustry;
+    if (!state.industry) return;
+    state.pendingIndustry = null;
     state.allocations = {};
     ensureRoundAllocations();
     save();
@@ -1016,8 +1024,19 @@ document.addEventListener("submit", async event => {
       }
     }
     state.teamId = remoteTeam?.teamId || teamId;
-    state.page = remoteTeam?.page || (savedTeam ? (state.page || "industries") : "industries");
-    if (state.page === "login") state.page = "industries";
+    const savedPage = remoteTeam?.page || state.resumePage || state.page;
+    if (!state.industry) {
+      state.page = "industries";
+    } else if (savedPage && !["login", "industries"].includes(savedPage)) {
+      state.page = savedPage;
+    } else if (state.round >= 4 && (state.isEliminated || state.history.some(result => result.round === 4))) {
+      state.page = "leaderboard";
+    } else if (state.history.some(result => result.round === state.round)) {
+      state.page = "results";
+    } else {
+      state.page = "game";
+    }
+    state.resumePage = state.page;
     trackActivity("team-connected", "Team joined or resumed the simulation.");
     save();
     showPage(state.page);
