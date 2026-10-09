@@ -1,6 +1,22 @@
 # Organizer portal
 
-The organizer portal is at `/admin.html` (or `/admin`). Team balances, leaderboard entries, and browser activity signals are shared through the Python server's JSON store. By default it is saved in the workspace sibling folder `.data-tycoon/server-data.json`, outside the served website so Live Server does not reload when game data changes. Set `DATA_PATH` in `.env` to choose another persistent location.
+The organizer portal is available at `/admin.html`. Team balances, leaderboard entries, and browser activity signals are shared through the API.
+
+## Deploy on Vercel
+
+The Vercel deployment uses the Python API in `api/index.py` and a PostgreSQL database. The existing `server.py` and local JSON store remain for local development only; data entered on localhost does not automatically appear in the production database.
+
+1. In the Vercel project, open **Storage** and create or connect a PostgreSQL database (for example, Neon through the Vercel Marketplace).
+2. In **Settings → Environment Variables**, ensure these variables are set for **Production**:
+   - `ADMIN_PASSWORD`: the organizer login password.
+   - `ADMIN_SESSION_SECRET`: a separate long random secret (recommended; if omitted, the API uses `ADMIN_PASSWORD` as the signing secret).
+   - `DATABASE_URL`: the PostgreSQL connection URL from the database provider. `POSTGRES_URL` is also accepted.
+3. Confirm the project’s Root Directory points to this website folder/repository root, where `vercel.json` and `requirements.txt` are located.
+4. Redeploy the Production deployment after changing environment variables.
+5. Open `https://<your-domain>/api/health`. A working setup returns `{"ok":true,"service":"data-tycoon"}`. If it returns 503, check the database URL and that the database accepts connections.
+6. Open `https://<your-domain>/admin.html` and sign in with the exact `ADMIN_PASSWORD` value. If you changed it, redeploy again and refresh the page.
+
+Vercel environment changes apply to new deployments, not deployments that are already running. The database tables are created automatically on the first API request. Keep the password, session secret, and database URL private; do not put them in frontend JavaScript or commit `.env`.
 
 ## Run locally
 
@@ -9,7 +25,7 @@ The organizer portal is at `/admin.html` (or `/admin`). Team balances, leaderboa
 3. From this folder run `python server.py`.
 4. Open `http://127.0.0.1:8000/admin.html` and sign in with the configured organizer password.
 
-Keep the organizer password and `server-data.json` private. Do not commit `.env` or the shared data file. For a public event, deploy this Python server over HTTPS and set a restrictive `ALLOWED_ORIGIN`; a static-only host cannot provide shared live data or money edits. If the frontend and API are hosted separately, set `window.DATA_TYCOON_API_BASE` in both HTML files to the API origin plus `/api`.
+The local Python server saves its JSON store in the workspace sibling folder `.data-tycoon/server-data.json` by default, outside the served website so Live Server does not reload when game data changes. Set `DATA_PATH` in `.env` to choose another persistent location. Local JSON data and Vercel PostgreSQL data are separate.
 
 The dashboard polls every two seconds. Team pages send a balance/game snapshot after changes and a five-second heartbeat. Organizer balance edits increment a revision that active team pages poll and apply. The activity log stores browser-reported signals such as window focus changes and detected Print Screen shortcuts. Browser APIs cannot detect every operating-system screenshot method. The app does not upload screen, camera, or audio content.
 
