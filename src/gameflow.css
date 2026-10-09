@@ -72,7 +72,9 @@
 .screen-locked{border-top:1px solid var(--rule);padding-top:16px;margin-top:17px;font:700 9px "DM Mono",monospace;letter-spacing:.15em}
 .news-paper{max-height:94vh;overflow-y:auto}
 .news-paper.flash-document-paper{height:94vh;max-height:94vh;overflow:hidden;display:flex;flex-direction:column;padding:clamp(10px,2vw,22px)}
-.flash-document-frame{display:block;flex:1 1 auto;width:100%;min-height:0;margin-top:12px;border:1px solid var(--rule);background:#fff}
+.flash-document-frame{display:block;flex:1 1 auto;width:100%;min-height:0;margin-top:12px;border:1px solid var(--rule);background:#fff;overflow:auto;overscroll-behavior:contain}
+.flash-rendered-page{display:grid;place-items:center;min-height:70vh;padding:10px;background:#fff;border-bottom:1px solid var(--rule);color:var(--muted);font:10px "DM Mono",monospace}
+.flash-rendered-page canvas{display:block;max-width:100%;height:auto;box-shadow:0 2px 12px #29282322}
 .flash-document-paper .screen-locked{flex:0 0 auto;text-align:center;margin:10px 0 0;padding-top:10px}
 .flash-document-paper,.flash-document-paper *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 .event-launcher{border-block:3px double var(--ink);background:#e5decc;padding:12px 14px;margin:0 0 18px}

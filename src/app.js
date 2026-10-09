@@ -2,6 +2,7 @@
 import { datasetFor, parametersByIndustry, payoutMultipliers } from "./data/round-rules.js";
 import { EVENT_DURATION_MS, events } from "./data/events.js";
 import { getLeaderboard, getTeamRank, replaceLeaderboard, updateTeamInLeaderboard } from "./data/leaderboard.js";
+import { clearFlashDocument, showFlashDocument } from "./flash-viewer.js";
 
 /* ── Keys & State Defaults ───────────────────────────────── */
 const STATE_KEY = "data-tycoon-game-v5";
@@ -789,6 +790,7 @@ function syncEventOverlay() {
       overlay.setAttribute("hidden", "true");
       overlay.style.display = "none";
     }
+    if (eventWasVisible) clearFlashDocument(document.querySelector("#eventDocument"));
     document.body.style.overflow = "";
     const appRoot = document.querySelector("#appRoot");
     if (appRoot) appRoot.inert = false;
@@ -805,11 +807,9 @@ function syncEventOverlay() {
 
   if (renderedEventId !== event.id) {
     document.querySelector("#flashNumber").textContent = `FLASH ${event.round} OF 04`;
-    const documentFrame = document.querySelector("#eventDocument");
+    const documentViewer = document.querySelector("#eventDocument");
     const flashUrl = new URL(event.document, location.href);
-    flashUrl.hash = "toolbar=0&navpanes=0&scrollbar=0";
-    documentFrame.src = flashUrl.href;
-    documentFrame.title = `Flash ${event.round} reading document`;
+    showFlashDocument(documentViewer, flashUrl.href);
     renderedEventId = event.id;
   }
 
@@ -870,14 +870,17 @@ window.addEventListener("focus", () => {
 document.addEventListener("keydown", event => {
   const key = event.key.toLowerCase();
   const printShortcut = (event.ctrlKey || event.metaKey) && key === "p";
+  const saveShortcut = (event.ctrlKey || event.metaKey) && !event.shiftKey && key === "s";
   const screenshotShortcut = event.key === "PrintScreen" || (event.metaKey && event.shiftKey && key === "s");
-  if (!printShortcut && !screenshotShortcut) return;
+  if (!printShortcut && !saveShortcut && !screenshotShortcut) return;
   event.preventDefault();
   if (activeEvent()) {
     trackActivity(
-      printShortcut ? "print-shortcut" : "screenshot-shortcut",
+      printShortcut ? "print-shortcut" : saveShortcut ? "save-shortcut" : "screenshot-shortcut",
       printShortcut
         ? "Detected a print or save-as-PDF shortcut during a flash."
+        : saveShortcut
+          ? "Detected a save-page shortcut during a flash."
         : `Detected ${event.key === "PrintScreen" ? "Print Screen" : "Windows/Meta + Shift + S"} shortcut.`
     );
   }
