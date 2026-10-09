@@ -14,6 +14,7 @@ from urllib.parse import unquote
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from pymongo import DESCENDING, MongoClient
+from pymongo.errors import DuplicateKeyError
 
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -118,6 +119,16 @@ def public_team(team: dict) -> dict:
 
 def player_team(team: dict) -> dict:
     return public_team(team)
+
+
+def team_pin_matches(team: dict, pin: str) -> bool:
+    try:
+        salt = bytes.fromhex(team.get("pinSalt", ""))
+        expected_hash = str(team.get("pinHash", ""))
+        candidate = hashlib.pbkdf2_hmac("sha256", pin.encode(), salt, 260_000).hex()
+        return bool(expected_hash) and hmac.compare_digest(candidate, expected_hash)
+    except (TypeError, ValueError):
+        return False
 
 
 def session_secret() -> str:
@@ -245,9 +256,21 @@ async def handle_api(request: Request) -> Response:
             db = mongo_database()
             team = load_team(db, key)
             if team and team.get("pinHash"):
-                salt = bytes.fromhex(team.get("pinSalt", ""))
-                candidate = hashlib.pbkdf2_hmac("sha256", pin.encode(), salt, 260_000).hex()
-                if not hmac.compare_digest(candidate, team["pinHash"]):
+                if not team_pin_matches(team, pin):
+                    attempts.append(now)
+                    TEAM_LOGIN_ATTEMPTS[client_ip] = attempts
+                    return json_response({"error": "Incorrect team PIN."}, 401)
+            elif team:
+                # Migrate a pre-PIN team exactly once. If another teammate signs in
+                # concurrently, the first PIN saved becomes the team's shared PIN.
+                salt = secrets.token_bytes(16)
+                pin_hash = hashlib.pbkdf2_hmac("sha256", pin.encode(), salt, 260_000).hex()
+                db.data_tycoon_teams.update_one(
+                    {"_id": key, "$or": [{"pinHash": {"$exists": False}}, {"pinHash": ""}]},
+                    {"$set": {"pinSalt": salt.hex(), "pinHash": pin_hash}},
+                )
+                team = load_team(db, key)
+                if not team or not team_pin_matches(team, pin):
                     attempts.append(now)
                     TEAM_LOGIN_ATTEMPTS[client_ip] = attempts
                     return json_response({"error": "Incorrect team PIN."}, 401)
@@ -270,9 +293,21 @@ async def handle_api(request: Request) -> Response:
                 salt = secrets.token_bytes(16)
                 team["pinSalt"] = salt.hex()
                 team["pinHash"] = hashlib.pbkdf2_hmac("sha256", pin.encode(), salt, 260_000).hex()
-                team["updatedAt"] = utc_now()
-                team["lastSeenEpoch"] = now
-                save_team(db, team)
+                try:
+                    db.data_tycoon_teams.insert_one({**team, "_id": key})
+                except DuplicateKeyError:
+                    # Another first sign-in claimed this normalized team name while
+                    # this request was hashing the PIN. Authenticate against the
+                    # stored account instead of replacing its PIN.
+                    team = load_team(db, key)
+                    if not team or not team_pin_matches(team, pin):
+                        attempts.append(now)
+                        TEAM_LOGIN_ATTEMPTS[client_ip] = attempts
+                        return json_response({"error": "Incorrect team PIN."}, 401)
+
+            team["updatedAt"] = utc_now()
+            team["lastSeenEpoch"] = now
+            save_team(db, team)
             TEAM_LOGIN_ATTEMPTS.pop(client_ip, None)
             return json_response({"token": issue_team_token(key), "team": player_team(team)})
         except Exception:
