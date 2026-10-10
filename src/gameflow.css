@@ -8,6 +8,8 @@
 .phase-edition{font:8px "DM Mono",monospace;letter-spacing:.1em;color:var(--muted);white-space:nowrap}
 .selection-strip{display:flex;justify-content:space-between;align-items:center;gap:18px;border-block:1px solid var(--rule);padding:12px 0;margin-bottom:18px}
 .selection-strip>div{display:grid;gap:5px}.selection-strip strong{font:700 10px "DM Mono",monospace;letter-spacing:.08em}.selection-strip span{font:8px "DM Mono",monospace;color:var(--muted);letter-spacing:.05em}
+.industry-seats{margin-top:auto!important;padding:8px 0;border-top:1px solid var(--rule);font:700 11px "DM Mono",monospace;color:var(--green);letter-spacing:.03em}
+.round-wait-message{font:700 14px "DM Mono",monospace;color:var(--red);margin:0 0 14px;font-variant-numeric:tabular-nums}
 .editorial-choice{position:relative;border-color:#9d9585;background:#f4edde;transition:background .15s,border-color .15s}
 .editorial-choice:hover,.editorial-choice.selected{background:#e9e1cf;border-color:var(--red)}
 .choice-topline{display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--rule);padding-bottom:10px}

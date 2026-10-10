@@ -38,13 +38,13 @@ const ranks = {
   Pharma: [
     ["R&D & Innovation", "Medical Devices & Digital Care", "Quality Control & Compliance", "Marketing & Sales", "Clinical Trials", "Drug Manufacturing", "Hospital & Care Network", "Supply Chain & Logistics", "Technology & Digitalization", "Workforce & Talent"],
     ["Supply Chain & Logistics", "Quality Control & Compliance", "Hospital & Care Network", "Technology & Digitalization", "Drug Manufacturing", "Clinical Trials", "Marketing & Sales", "Medical Devices & Digital Care", "R&D & Innovation", "Workforce & Talent"],
-    ["Quality Control & Compliance", "Drug Manufacturing", "Hospital & Care Network", "Technology & Digitalization", "Clinical Trials", "Marketing & Sales", "Medical Devices & Digital Care", "Supply Chain & Logistics", "R&D & Innovation", "Workforce & Talent"],
+    ["Quality Control & Compliance", "Drug Manufacturing", "Marketing & Sales", "Supply Chain & Logistics", "Hospital & Care Network", "Technology & Digitalization", "Clinical Trials", "R&D & Innovation", "Medical Devices & Digital Care", "Workforce & Talent"],
     ["Drug Manufacturing", "R&D & Innovation", "Hospital & Care Network", "Quality Control & Compliance", "Technology & Digitalization", "Marketing & Sales", "Medical Devices & Digital Care", "Clinical Trials", "Workforce & Talent", "Supply Chain & Logistics"]
   ],
   "Travel and Auto": [
     ["Energy & Propulsion", "Vehicle Manufacturing", "R&D & Innovation", "Vehicle Technology", "Supply Chain & Logistics", "Technology & Digitalization", "Dealership & Distribution", "Tourism & Aviation", "Marketing & Sales", "Workforce & Talent"],
-    ["R&D & Innovation", "Marketing & Sales", "Supply Chain & Logistics", "Technology & Digitalization", "Workforce & Talent", "Vehicle Manufacturing", "Energy & Propulsion", "Vehicle Technology", "Dealership & Distribution", "Tourism & Aviation"],
     ["Supply Chain & Logistics", "Dealership & Distribution", "Vehicle Manufacturing", "Technology & Digitalization", "Vehicle Technology", "Workforce & Talent", "Marketing & Sales", "R&D & Innovation", "Energy & Propulsion", "Tourism & Aviation"],
+    ["Marketing & Sales", "Dealership & Distribution", "Vehicle Technology", "Vehicle Manufacturing", "Supply Chain & Logistics", "Energy & Propulsion", "Technology & Digitalization", "R&D & Innovation", "Tourism & Aviation", "Workforce & Talent"],
     ["Marketing & Sales", "Dealership & Distribution", "Vehicle Technology", "Vehicle Manufacturing", "Supply Chain & Logistics", "Energy & Propulsion", "Technology & Digitalization", "R&D & Innovation", "Workforce & Talent", "Tourism & Aviation"]
   ]
 };

@@ -16,6 +16,7 @@ export function saveLeaderboard(data) {
 export function replaceLeaderboard(data) {
   const current = Array.isArray(data) ? data.filter(team => team && typeof team.teamId === "string") : [];
   current.sort((a, b) => (Number(b.companyValue) || 0) - (Number(a.companyValue) || 0)
+    || (Number(a.valueEnteredAt) || Number.MAX_SAFE_INTEGER) - (Number(b.valueEnteredAt) || Number.MAX_SAFE_INTEGER)
     || a.teamId.localeCompare(b.teamId, undefined, { sensitivity: "base" }));
   saveLeaderboard(current);
   return current;
@@ -30,7 +31,9 @@ export function updateTeamInLeaderboard(teamRecord) {
     current.push({ ...teamRecord, lastUpdated: Date.now() });
   }
   // Sort descending by companyValue (net balance)
-  current.sort((a, b) => (b.companyValue || 0) - (a.companyValue || 0));
+  current.sort((a, b) => (Number(b.companyValue) || 0) - (Number(a.companyValue) || 0)
+    || (Number(a.valueEnteredAt) || Number.MAX_SAFE_INTEGER) - (Number(b.valueEnteredAt) || Number.MAX_SAFE_INTEGER)
+    || a.teamId.localeCompare(b.teamId, undefined, { sensitivity: "base" }));
   saveLeaderboard(current);
   return current;
 }

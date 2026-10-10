@@ -19,6 +19,15 @@ ROOT = Path(__file__).resolve().parent
 STORE_LOCK = threading.RLock()
 LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 LAST_SEEN: dict[str, float] = {}
+INDUSTRIES = ["Food", "Electronics", "Travel and Auto", "Pharma", "Education"]
+INDUSTRY_CAPACITY = 20
+
+
+def industry_capacity(teams: dict) -> list[dict]:
+    return [{"industry": name, "capacity": INDUSTRY_CAPACITY,
+             "assigned": sum(1 for team in teams.values() if team.get("industry") == name),
+             "remaining": max(0, INDUSTRY_CAPACITY - sum(1 for team in teams.values() if team.get("industry") == name))}
+            for name in INDUSTRIES]
 
 
 def load_dotenv() -> None:
@@ -188,6 +197,10 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 "enabled": bool(setting.get("enabled", False)),
                 "changedAt": int(setting.get("changedAt", 0)),
             })
+        if path == "/api/industry-capacity":
+            with STORE_LOCK:
+                teams = read_store()["teams"]
+            return self.send_json(200, industry_capacity(teams))
         if path.startswith("/api/team/") and path.endswith("/balance"):
             requested_id = unquote(path[len("/api/team/"):-len("/balance")])
             with STORE_LOCK:
@@ -197,6 +210,7 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
             return self.send_json(200, {
                 "teamId": team["teamId"],
                 "companyValue": team["companyValue"],
+                "valueEnteredAt": team.get("valueEnteredAt", 0),
                 "moneyRevision": team.get("moneyRevision", 0),
             })
         if path.startswith("/api/team/"):
@@ -205,11 +219,7 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 team = read_store()["teams"].get(team_key(requested_id))
             if not team:
                 return self.send_json(404, {"error": "Team not found."})
-            return self.send_json(200, {
-                "teamId": team["teamId"],
-                "companyValue": team["companyValue"],
-                "moneyRevision": team.get("moneyRevision", 0),
-            })
+            return self.send_json(200, public_team(team))
         if path == "/api/leaderboard":
             with STORE_LOCK:
                 teams = list(read_store()["teams"].values())
@@ -218,9 +228,10 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 "industry": team.get("industry", ""),
                 "round": team.get("round", 1),
                 "companyValue": team.get("companyValue", 0),
+                "valueEnteredAt": team.get("valueEnteredAt", 0),
                 "isEliminated": bool(team.get("isEliminated")),
             } for team in teams]
-            leaderboard.sort(key=lambda team: (-float(team.get("companyValue", 0)), team["teamId"].casefold()))
+            leaderboard.sort(key=lambda team: (-float(team.get("companyValue", 0)), int(team.get("valueEnteredAt") or 2**63), team["teamId"].casefold()))
             return self.send_json(200, leaderboard)
         if path == "/api/admin/teams":
             if not self.admin_authorized():
@@ -232,7 +243,7 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 public_team(team) | {"online": now - max(team.get("lastSeenEpoch", 0), LAST_SEEN.get(team_key(team["teamId"]), 0)) < 20}
                 for team in data["teams"].values()
             ]
-            teams.sort(key=lambda team: (-float(team.get("companyValue", 0)), team.get("teamId", "").casefold()))
+            teams.sort(key=lambda team: (-float(team.get("companyValue", 0)), int(team.get("valueEnteredAt") or 2**63), team.get("teamId", "").casefold()))
             return self.send_json(200, teams)
         if path == "/api/admin/dashboard":
             if not self.admin_authorized():
@@ -246,8 +257,9 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 public_team(team) | {"online": now - max(team.get("lastSeenEpoch", 0), LAST_SEEN.get(team_key(team["teamId"]), 0)) < 45}
                 for team in data["teams"].values()
             ]
-            teams.sort(key=lambda team: (-float(team.get("companyValue", 0)), team.get("teamId", "").casefold()))
+            teams.sort(key=lambda team: (-float(team.get("companyValue", 0)), int(team.get("valueEnteredAt") or 2**63), team.get("teamId", "").casefold()))
             activities = data["activities"]
+            activities = [item for item in activities if item.get("kind") == "window-blur"]
             if filter_team:
                 activities = [item for item in activities if item.get("teamId", "").casefold() == filter_team]
             timer = data.get("settings", {}).get("flashTimer", {})
@@ -255,6 +267,7 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 "teams": teams,
                 "activities": activities[-100:][::-1],
                 "flashTimer": {"enabled": bool(timer.get("enabled", False)), "changedAt": int(timer.get("changedAt", 0))},
+                "industryCapacity": industry_capacity(data["teams"]),
             })
         if path == "/api/admin/activities":
             if not self.admin_authorized():
@@ -263,6 +276,7 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
             filter_team = query.get("teamId", [""])[0].casefold()
             with STORE_LOCK:
                 activities = list(read_store()["activities"])
+            activities = [item for item in activities if item.get("kind") == "window-blur"]
             if filter_team:
                 activities = [item for item in activities if item.get("teamId", "").casefold() == filter_team]
             return self.send_json(200, activities[-250:][::-1])
@@ -313,17 +327,33 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 data = read_store()
                 previous = data["teams"].get(key, {})
                 incoming_history = body.get("history") if isinstance(body.get("history"), list) else []
-                previous_rounds = {item.get("round") for item in previous.get("history", [])}
+                previous_round = int(previous.get("round", 1))
+                previous_rounds = {item.get("round") for item in previous.get("history", []) if isinstance(item, dict)}
                 has_new_result = any(item.get("round") not in previous_rounds for item in incoming_history if isinstance(item, dict))
+                if round_number > previous_round and (
+                    round_number != previous_round + 1
+                    or not any(isinstance(item, dict) and item.get("round") == previous_round for item in previous.get("history", []))
+                    or not int(previous.get("roundWaitUntil", 0) or 0)
+                    or int(previous.get("roundWaitUntil", 0) or 0) > time.time() * 1000
+                ):
+                    return self.send_json(409, {"error": "Complete the round and wait 30 minutes before opening the next flash."})
                 preserve_override = previous.get("adminOverride") and not has_new_result
                 next_balance = previous.get("companyValue", balance) if preserve_override else balance
+                entered_at = int(previous.get("valueEnteredAt", 0) or 0)
+                if not entered_at or (not preserve_override and balance != previous.get("companyValue")):
+                    entered_at = time.time_ns() // 1000
+                wait_until = int(previous.get("roundWaitUntil", 0) or 0)
+                if has_new_result and round_number < 4 and not bool(body.get("isEliminated")):
+                    wait_until = max(wait_until, int(time.time() * 1000) + 30 * 60 * 1000)
                 revision = int(previous.get("moneyRevision", 0))
                 team = {
                     **previous,
                     "teamId": team_id,
-                    "industry": clean_text(previous.get("industry"), 80) or clean_text(body.get("industry"), 80),
+                    "industry": clean_text(previous.get("industry"), 80),
                     "round": round_number,
                     "companyValue": next_balance,
+                    "valueEnteredAt": entered_at,
+                    "roundWaitUntil": wait_until,
                     "allocations": safe_allocations(body.get("allocations")),
                     "history": [{"round": item.get("round"), "finalPayout": item.get("finalPayout", item.get("newValue", 0)), "eliminated": bool(item.get("eliminated"))} for item in incoming_history if isinstance(item, dict)][-4:],
                     "page": clean_text(body.get("page"), 24),
@@ -337,6 +367,60 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 LAST_SEEN[key] = team["lastSeenEpoch"]
                 write_store(data)
             return self.send_json(200, {"team": public_team(team)})
+
+        if path == "/api/team/industry":
+            team_id = clean_text(body.get("teamId"), 80)
+            industry = clean_text(body.get("industry"), 80)
+            if industry not in INDUSTRIES:
+                return self.send_json(400, {"error": "Choose a valid industry."})
+            with STORE_LOCK:
+                data = read_store()
+                team = data["teams"].get(team_key(team_id))
+                if not team:
+                    return self.send_json(404, {"error": "Team not found. Please wait a moment and confirm again."})
+                current = clean_text(team.get("industry"), 80)
+                if current and current != industry:
+                    return self.send_json(409, {"error": "Industry selection is already locked for this team."})
+                if not current:
+                    assigned = sum(1 for item in data["teams"].values() if item.get("industry") == industry)
+                    if assigned >= INDUSTRY_CAPACITY:
+                        return self.send_json(409, {"error": "This industry has reached its 20-team limit. Choose an industry with seats remaining."})
+                    team["industry"] = industry
+                    team["updatedAt"] = utc_now()
+                    write_store(data)
+                capacity = industry_capacity(data["teams"])
+                result = public_team(team)
+            return self.send_json(200, {"team": result, "industryCapacity": capacity})
+
+        if path == "/api/team/advance-round":
+            team_id = clean_text(body.get("teamId"), 80)
+            with STORE_LOCK:
+                data = read_store()
+                team = data["teams"].get(team_key(team_id))
+                if not team:
+                    return self.send_json(404, {"error": "Team not found."})
+                wait_until = int(team.get("roundWaitUntil", 0) or 0)
+                current_round = int(team.get("round", 1))
+                submitted = any(isinstance(item, dict) and item.get("round") == current_round for item in team.get("history", []))
+                if submitted and current_round < 4 and not team.get("isEliminated") and wait_until <= 0:
+                    wait_until = int(time.time() * 1000) + 30 * 60 * 1000
+                    team["roundWaitUntil"] = wait_until
+                    write_store(data)
+                if int(time.time() * 1000) < wait_until:
+                    return self.send_json(409, {"error": "The 30-minute wait before the next flash has not finished.", "roundWaitUntil": wait_until})
+                if current_round >= 4 or team.get("isEliminated"):
+                    return self.send_json(409, {"error": "This team cannot open another round."})
+                if not submitted:
+                    return self.send_json(409, {"error": "Submit this round before opening the next flash."})
+                team["round"] = current_round + 1
+                team["roundWaitUntil"] = 0
+                team["page"] = "game"
+                team["updatedAt"] = utc_now()
+                team["lastSeenEpoch"] = time.time()
+                LAST_SEEN[team_key(team_id)] = team["lastSeenEpoch"]
+                write_store(data)
+                result = public_team(team)
+            return self.send_json(200, {"team": result})
 
         if path == "/api/team/activity":
             team_id = clean_text(body.get("teamId"), 80)
@@ -407,6 +491,8 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 return self.send_json(404, {"error": "Team not found."})
             old_amount = team["companyValue"]
             team["companyValue"] = round(amount)
+            if team["companyValue"] != old_amount or not team.get("valueEnteredAt"):
+                team["valueEnteredAt"] = time.time_ns() // 1000
             team["moneyRevision"] = int(team.get("moneyRevision", 0)) + 1
             team["adminOverride"] = True
             team["updatedAt"] = utc_now()

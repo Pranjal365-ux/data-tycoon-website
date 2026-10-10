@@ -13,7 +13,7 @@ from urllib.parse import unquote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
-from pymongo import DESCENDING, MongoClient
+from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 
@@ -21,6 +21,8 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 TEAM_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 MAX_ACTIVITIES = 1500
+INDUSTRIES = ["Food", "Electronics", "Travel and Auto", "Pharma", "Education"]
+INDUSTRY_CAPACITY = 20
 ACTIVITY_PRUNE_EVERY = 100
 ACTIVITY_WRITES_SINCE_PRUNE = 0
 MONGO_CLIENT: MongoClient | None = None
@@ -50,7 +52,9 @@ def mongo_database():
     db = MONGO_CLIENT[database_name]
     if not MONGO_INDEXES_READY:
         db.data_tycoon_activities.create_index([("teamKey", 1), ("_id", DESCENDING)])
-        db.data_tycoon_teams.create_index([("companyValue", DESCENDING), ("teamId", 1)], name="leaderboard_value_team")
+        db.data_tycoon_activities.create_index([("kind", 1), ("_id", DESCENDING)], name="activity_kind_recent")
+        db.data_tycoon_teams.create_index([("companyValue", DESCENDING), ("valueEnteredAt", ASCENDING), ("teamId", 1)], name="leaderboard_value_first")
+        db.data_tycoon_teams.update_many({"valueEnteredAt": {"$exists": False}}, {"$set": {"valueEnteredAt": time.time_ns() // 1000}})
         MONGO_INDEXES_READY = True
     return db
 
@@ -127,6 +131,45 @@ def public_team(team: dict) -> dict:
 
 def player_team(team: dict) -> dict:
     return public_team(team)
+
+
+def industry_capacity(db) -> list[dict]:
+    counts = {name: db.data_tycoon_teams.count_documents({"industry": name}) for name in INDUSTRIES}
+    return [{"industry": name, "capacity": INDUSTRY_CAPACITY, "assigned": counts[name], "remaining": max(0, INDUSTRY_CAPACITY - counts[name])} for name in INDUSTRIES]
+
+
+def reserve_industry(db, team_id: str, industry: str):
+    key = team_key(team_id)
+    team = load_team(db, key)
+    if not team:
+        return None, "Team not found.", 404
+    current = clean_text(team.get("industry"), 80)
+    if current:
+        return (team, "", 200) if current == industry else (None, "Industry selection is already locked for this team.", 409)
+    capacity = db.data_tycoon_industry_capacity
+    counter = capacity.find_one({"_id": industry})
+    if counter is None:
+        count = db.data_tycoon_teams.count_documents({"industry": industry})
+        try:
+            capacity.insert_one({"_id": industry, "count": count})
+        except DuplicateKeyError:
+            pass
+    slot = capacity.find_one_and_update({"_id": industry, "count": {"$lt": INDUSTRY_CAPACITY}}, {"$inc": {"count": 1}}, return_document=ReturnDocument.AFTER)
+    if not slot:
+        return None, "This industry has reached its 20-team limit. Choose an industry with seats remaining.", 409
+    updated = db.data_tycoon_teams.find_one_and_update(
+        {"_id": key, "$or": [{"industry": ""}, {"industry": {"$exists": False}}, {"industry": None}]},
+        {"$set": {"industry": industry, "updatedAt": utc_now()}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not updated:
+        capacity.update_one({"_id": industry, "count": {"$gt": 0}}, {"$inc": {"count": -1}})
+        current_team = load_team(db, key)
+        if current_team and current_team.get("industry") == industry:
+            return current_team, "", 200
+        return None, "Industry selection is already locked for this team.", 409
+    updated.pop("_id", None)
+    return updated, "", 200
 
 
 def team_pin_matches(team: dict, pin: str) -> bool:
@@ -293,6 +336,8 @@ async def handle_api(request: Request) -> Response:
                     "industry": "",
                     "round": 1,
                     "companyValue": 1_000_000,
+                    "valueEnteredAt": time.time_ns() // 1000,
+                    "roundWaitUntil": 0,
                     "allocations": {},
                     "history": [],
                     "page": "industries",
@@ -369,7 +414,7 @@ async def handle_api(request: Request) -> Response:
         try:
             row = mongo_database().data_tycoon_teams.find_one(
                 {"_id": team_key(requested_id)},
-                {"_id": 0, "companyValue": 1, "moneyRevision": 1},
+                {"_id": 0, "companyValue": 1, "valueEnteredAt": 1, "moneyRevision": 1},
             )
             if not row:
                 return json_response({"error": "Team not found."}, 404)
@@ -394,8 +439,8 @@ async def handle_api(request: Request) -> Response:
         try:
             db = mongo_database()
             teams = list(db.data_tycoon_teams.find(
-                {}, {"_id": 0, "teamId": 1, "industry": 1, "round": 1, "companyValue": 1, "isEliminated": 1}
-            ).sort([("companyValue", DESCENDING), ("teamId", 1)]))
+                {}, {"_id": 0, "teamId": 1, "industry": 1, "round": 1, "companyValue": 1, "valueEnteredAt": 1, "isEliminated": 1}
+            ).sort([("companyValue", DESCENDING), ("valueEnteredAt", ASCENDING), ("teamId", 1)]))
             return json_response(teams)
         except Exception:
             return json_response({"error": "Could not load the leaderboard. Check MONGODB_URI."}, 503)
@@ -409,22 +454,24 @@ async def handle_api(request: Request) -> Response:
             now = time.time()
             team_projection = {
                 "_id": 0, "teamId": 1, "industry": 1, "round": 1,
-                "companyValue": 1, "isEliminated": 1, "lastSeenEpoch": 1,
+                "companyValue": 1, "valueEnteredAt": 1, "isEliminated": 1, "lastSeenEpoch": 1,
             }
             rows = db.data_tycoon_teams.find({}, team_projection).sort(
-                [("companyValue", DESCENDING), ("teamId", 1)]
+                [("companyValue", DESCENDING), ("valueEnteredAt", ASCENDING), ("teamId", 1)]
             )
             teams = [
                 dict(row, online=now - float(row.get("lastSeenEpoch", 0)) < 45)
                 for row in rows
             ]
-            query = {"teamKey": filter_team} if filter_team else {}
+            query = {"kind": "window-blur"}
+            if filter_team:
+                query["teamKey"] = filter_team
             activities = list(
                 db.data_tycoon_activities.find(query, {"_id": 0, "teamKey": 0})
                 .sort("_id", DESCENDING)
                 .limit(100)
             )
-            return json_response({"teams": teams, "activities": activities, "flashTimer": flash_timer_settings(db)})
+            return json_response({"teams": teams, "activities": activities, "flashTimer": flash_timer_settings(db), "industryCapacity": industry_capacity(db)})
         except Exception:
             return json_response({"error": "Database unavailable. Check MONGODB_URI."}, 503)
 
@@ -435,13 +482,13 @@ async def handle_api(request: Request) -> Response:
             db = mongo_database()
             projection = {
                 "_id": 0, "teamId": 1, "industry": 1, "round": 1,
-                "companyValue": 1, "isEliminated": 1, "lastSeenEpoch": 1,
+                "companyValue": 1, "valueEnteredAt": 1, "isEliminated": 1, "lastSeenEpoch": 1,
             }
             now = time.time()
             teams = [
                 dict(row, online=now - float(row.get("lastSeenEpoch", 0)) < 45)
                 for row in db.data_tycoon_teams.find({}, projection).sort(
-                    [("companyValue", DESCENDING), ("teamId", 1)]
+                    [("companyValue", DESCENDING), ("valueEnteredAt", ASCENDING), ("teamId", 1)]
                 )
             ]
             return json_response(teams)
@@ -454,11 +501,19 @@ async def handle_api(request: Request) -> Response:
         filter_team = request.query_params.get("teamId", "").casefold()
         try:
             db = mongo_database()
-            query = {"teamKey": filter_team} if filter_team else {}
+            query = {"kind": "window-blur"}
+            if filter_team:
+                query["teamKey"] = filter_team
             rows = list(db.data_tycoon_activities.find(query, {"_id": 0, "teamKey": 0}).sort("_id", DESCENDING).limit(250))
             return json_response(rows)
         except Exception:
             return json_response({"error": "Database unavailable. Check MONGODB_URI."}, 503)
+
+    if method == "GET" and route == "industry-capacity":
+        try:
+            return json_response(industry_capacity(mongo_database()))
+        except Exception:
+            return json_response({"error": "Could not load industry availability."}, 503)
 
     if method == "POST":
         try:
@@ -483,18 +538,34 @@ async def handle_api(request: Request) -> Response:
             try:
                 db = mongo_database()
                 previous = load_team(db, team_key(team_id)) or {}
+                previous_round = int(previous.get("round", 1))
                 incoming_history = body.get("history") if isinstance(body.get("history"), list) else []
                 previous_rounds = {item.get("round") for item in previous.get("history", []) if isinstance(item, dict)}
                 has_new_result = any(
                     item.get("round") not in previous_rounds for item in incoming_history if isinstance(item, dict)
                 )
+                if round_number > previous_round and (
+                    round_number != previous_round + 1
+                    or not any(isinstance(item, dict) and item.get("round") == previous_round for item in previous.get("history", []))
+                    or not previous.get("roundWaitUntil")
+                    or previous.get("roundWaitUntil", 0) > time.time() * 1000
+                ):
+                    return json_response({"error": "Complete the round and wait 30 minutes before opening the next flash."}, 409)
                 preserve_override = previous.get("adminOverride") and not has_new_result
+                saved_balance = previous.get("companyValue", balance) if preserve_override else balance
+                entered_at = int(previous.get("valueEnteredAt", 0) or 0)
+                if not entered_at or (not preserve_override and balance != previous.get("companyValue")):
+                    entered_at = time.time_ns() // 1000
+                wait_until = int(previous.get("roundWaitUntil", 0) or 0)
+                if has_new_result and round_number < 4 and not bool(body.get("isEliminated")):
+                    wait_until = max(wait_until, int(time.time() * 1000) + 30 * 60 * 1000)
                 team = {
                     **previous,
                     "teamId": team_id,
-                    "industry": clean_text(previous.get("industry"), 80) or clean_text(body.get("industry"), 80),
+                    "industry": clean_text(previous.get("industry"), 80),
                     "round": round_number,
-                    "companyValue": previous.get("companyValue", balance) if preserve_override else balance,
+                    "companyValue": saved_balance,
+                    "valueEnteredAt": entered_at,
                     "allocations": safe_allocations(body.get("allocations")),
                     "history": [
                         item
@@ -515,12 +586,63 @@ async def handle_api(request: Request) -> Response:
                     "datasetDownloadedRounds": safe_boolean_map(body.get("datasetDownloadedRounds")),
                     "offlineBonusClaimed": safe_boolean_map(body.get("offlineBonusClaimed")),
                     "round2GrantApplied": bool(body.get("round2GrantApplied")),
+                    "roundWaitUntil": wait_until,
                     "activeFlash": safe_active_flash(body.get("activeFlash")),
                 }
                 save_team(db, team)
                 return json_response({"team": public_team(team)})
             except Exception:
                 return json_response({"error": "Could not save team. Check MONGODB_URI."}, 503)
+
+        if route == "team/industry":
+            team_id = clean_text(body.get("teamId"), 80)
+            industry = clean_text(body.get("industry"), 80)
+            if industry not in INDUSTRIES:
+                return json_response({"error": "Choose a valid industry."}, 400)
+            if not team_id or not team_authorized(request, team_id):
+                return json_response({"error": "Team sign-in required. Enter the team PIN again."}, 401)
+            try:
+                db = mongo_database()
+                team, error, status = reserve_industry(db, team_id, industry)
+                if error:
+                    return json_response({"error": error, "industryCapacity": industry_capacity(db)}, status)
+                return json_response({"team": public_team(team), "industryCapacity": industry_capacity(db)})
+            except Exception:
+                return json_response({"error": "Could not reserve an industry seat. Try again."}, 503)
+
+        if route == "team/advance-round":
+            team_id = clean_text(body.get("teamId"), 80)
+            if not team_id or not team_authorized(request, team_id):
+                return json_response({"error": "Team sign-in required. Enter the team PIN again."}, 401)
+            try:
+                db = mongo_database()
+                now = int(time.time() * 1000)
+                team = db.data_tycoon_teams.find_one({"_id": team_key(team_id)})
+                if not team:
+                    return json_response({"error": "Team not found."}, 404)
+                wait_until = int(team.get("roundWaitUntil", 0) or 0)
+                current_round = int(team.get("round", 1))
+                submitted = any(isinstance(item, dict) and item.get("round") == current_round for item in team.get("history", []))
+                if submitted and current_round < 4 and not team.get("isEliminated") and wait_until <= 0:
+                    wait_until = now + 30 * 60 * 1000
+                    db.data_tycoon_teams.update_one({"_id": team_key(team_id)}, {"$set": {"roundWaitUntil": wait_until}})
+                if now < wait_until:
+                    return json_response({"error": "The 30-minute wait before the next flash has not finished.", "roundWaitUntil": wait_until}, 409)
+                if current_round >= 4 or team.get("isEliminated"):
+                    return json_response({"error": "This team cannot open another round."}, 409)
+                if not submitted:
+                    return json_response({"error": "Submit this round before opening the next flash."}, 409)
+                updated = db.data_tycoon_teams.find_one_and_update(
+                    {"_id": team_key(team_id), "round": current_round, "roundWaitUntil": {"$lte": now}},
+                    {"$set": {"round": current_round + 1, "roundWaitUntil": 0, "page": "game", "updatedAt": utc_now(), "lastSeenEpoch": time.time()}},
+                    return_document=ReturnDocument.AFTER,
+                )
+                if not updated:
+                    return json_response({"error": "The round changed in another session. Reload your team."}, 409)
+                updated.pop("_id", None)
+                return json_response({"team": public_team(updated)})
+            except Exception:
+                return json_response({"error": "Could not advance the round."}, 503)
 
         if route == "team/activity":
             team_id = clean_text(body.get("teamId"), 80)
@@ -596,6 +718,8 @@ async def handle_api(request: Request) -> Response:
                 return json_response({"error": "Team not found."}, 404)
             old_amount = team["companyValue"]
             team["companyValue"] = round(amount)
+            if team["companyValue"] != old_amount or not team.get("valueEnteredAt"):
+                team["valueEnteredAt"] = time.time_ns() // 1000
             team["moneyRevision"] = int(team.get("moneyRevision", 0)) + 1
             team["adminOverride"] = True
             team["updatedAt"] = utc_now()

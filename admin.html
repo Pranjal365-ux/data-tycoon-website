@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#f5edda" />
   <title>Organizer Portal | Data Tycoon</title>
-  <link rel="stylesheet" href="./src/admin.css?v=2" />
+  <link rel="stylesheet" href="./src/admin.css?v=3" />
 </head>
 <body>
   <header class="admin-header">
@@ -27,11 +27,11 @@
 
     <section id="dashboard" hidden>
       <div class="dashboard-heading">
-        <div><p class="eyebrow">LIVE EVENT CONTROL</p><h1>Organizer dashboard</h1><p class="muted">Balances and activity refresh automatically every five seconds.</p></div>
+        <div><p class="eyebrow">LIVE EVENT CONTROL</p><h1>Organizer dashboard</h1><p class="muted">Balances and activity refresh automatically every two seconds.</p></div>
         <button id="logoutButton" class="button-secondary" type="button">SIGN OUT</button>
       </div>
 
-      <div class="integrity-note"><strong>Monitoring limits:</strong> the portal records browser-reported focus changes and screenshot shortcuts. Browsers cannot report every OS screenshot method. No screen, camera, or audio is captured.</div>
+      <div class="integrity-note"><strong>Monitoring limits:</strong> “Screenshot” alerts mean the game window lost focus; they do not confirm a screenshot. Browsers cannot report every OS screenshot method. No screen, camera, or audio is captured.</div>
 
       <section class="panel flash-timer-control" aria-labelledby="flashTimerHeading">
         <div><p class="eyebrow">ROUND ACCESS CONTROL</p><h2 id="flashTimerHeading">Flash timer</h2><p id="flashTimerDescription" class="muted">Loading current timer setting…</p></div>
@@ -41,13 +41,13 @@
       <section class="stats-grid" aria-label="Event summary">
         <article class="stat-card"><span>TEAMS</span><strong id="teamCount">0</strong></article>
         <article class="stat-card"><span>ONLINE NOW</span><strong id="onlineCount">0</strong></article>
-        <article class="stat-card"><span>FOCUS / SCREEN / CLIPBOARD SIGNALS · 10 MIN</span><strong id="signalCount">0</strong></article>
+        <article class="stat-card"><span>SCREENSHOT SIGNALS · 10 MIN</span><strong id="signalCount">0</strong></article>
         <article class="stat-card"><span>COMBINED TEAM BALANCE</span><strong id="combinedBalance">₹0</strong></article>
       </section>
 
       <div class="content-grid">
         <section class="panel team-panel">
-          <div class="panel-heading"><div><p class="eyebrow">LIVE STANDINGS</p><h2>Leaderboard and balances</h2></div><button id="refreshButton" class="button-secondary" type="button">REFRESH</button></div>
+          <div class="panel-heading"><div><p class="eyebrow">LIVE STANDINGS</p><h2>Leaderboard and balances</h2></div><div class="admin-filters"><select id="industryFilter" aria-label="Filter teams by industry"><option value="">All industries</option></select><button id="refreshButton" class="button-secondary" type="button">REFRESH</button></div></div>
           <div class="table-wrap">
             <table>
               <thead><tr><th>#</th><th>TEAM</th><th>INDUSTRY</th><th>ROUND</th><th>BALANCE</th><th>STATUS</th><th>SET BALANCE</th></tr></thead>
@@ -57,7 +57,7 @@
         </section>
 
         <section class="panel activity-panel">
-          <div class="panel-heading"><div><p class="eyebrow">EVENT INTEGRITY</p><h2>Live activity</h2></div><select id="activityFilter" aria-label="Filter activity"><option value="">All teams</option></select></div>
+          <div class="panel-heading"><div><p class="eyebrow">EVENT INTEGRITY</p><h2>Window blur alerts</h2></div><select id="activityFilter" aria-label="Filter blur alerts by team"><option value="">All teams</option></select></div>
           <div id="activityFeed" class="activity-feed"><p class="empty">Waiting for activity…</p></div>
         </section>
       </div>
@@ -66,6 +66,6 @@
     </section>
   </main>
   <script>window.DATA_TYCOON_API_BASE = "";</script>
-  <script type="module" src="./src/admin.js?v=6"></script>
+  <script type="module" src="./src/admin.js?v=7"></script>
 </body>
 </html>

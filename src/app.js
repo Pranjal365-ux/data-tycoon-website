@@ -9,6 +9,7 @@ const STATE_KEY = "data-tycoon-game-v5";
 const EVENT_KEY_PREFIX = "data-tycoon-active-event-v6";
 const BASE_ROUND_BUDGET = 1_000_000;
 const ROUND_BONUS = 250_000;
+const ROUND_WAIT_MS = 30 * 60 * 1000;
 
 function roundBonusFor(round = state?.round ?? 1) {
   return [2, 3].includes(Number(round)) ? ROUND_BONUS : 0;
@@ -28,6 +29,8 @@ const defaults = {
   round: 1,
   scoringVersion: 2,
   companyValue: BASE_ROUND_BUDGET,
+  valueEnteredAt: 0,
+  roundWaitUntil: 0,
   moneyRevision: 0,
   // Direct rupee amounts invested across the selected industry parameters
   allocations: {},
@@ -146,6 +149,7 @@ function scheduleTeamSync() {
       industry: state.industry,
       round: state.round,
       companyValue: state.companyValue,
+      valueEnteredAt: state.valueEnteredAt || 0,
       moneyRevision: state.moneyRevision || 0,
       allocations: state.allocations,
       history: state.history,
@@ -157,6 +161,7 @@ function scheduleTeamSync() {
       datasetDownloadedRounds: state.datasetDownloadedRounds,
       offlineBonusClaimed: state.offlineBonusClaimed,
       round2GrantApplied: state.round2GrantApplied,
+      roundWaitUntil: state.roundWaitUntil || 0,
       activeFlash: savedActiveFlash(),
       page: state.page === "login" ? (state.resumePage || "industries") : state.page,
       isEliminated: state.isEliminated
@@ -193,7 +198,8 @@ function save() {
       industry: state.industry,
       round: state.round,
       companyValue: state.companyValue,
-      history: state.history
+      history: state.history,
+      valueEnteredAt: state.valueEnteredAt || 0
     });
   }
 }
@@ -281,8 +287,9 @@ async function syncOrganizerMoney() {
     if (Number(remote.moneyRevision || 0) <= Number(state.moneyRevision || 0)) return;
     state.moneyRevision = Number(remote.moneyRevision);
     state.companyValue = Number(remote.companyValue) || 0;
+    state.valueEnteredAt = Number(remote.valueEnteredAt) || state.valueEnteredAt;
     persistState({ sync: false });
-    updateTeamInLeaderboard({ teamId: state.teamId, industry: state.industry, round: state.round, companyValue: state.companyValue, history: state.history });
+    updateTeamInLeaderboard({ teamId: state.teamId, industry: state.industry, round: state.round, companyValue: state.companyValue, valueEnteredAt: state.valueEnteredAt, history: state.history });
     if (state.page === "game") render();
     trackActivity("organizer-balance-applied", `Organizer updated the team's balance to ${money(state.companyValue)}.`);
   } catch {
@@ -302,6 +309,71 @@ async function refreshSharedLeaderboard() {
     if (state.page === "leaderboard" && before !== JSON.stringify(getLeaderboard())) render();
   } catch (error) {
     console.warn("Could not load the shared leaderboard; showing this browser's saved copy.", error);
+  }
+}
+
+let industryCapacity = [];
+async function refreshIndustryCapacity() {
+  try {
+    const response = await fetch(`${apiBase()}/industry-capacity`, { cache: "no-store" });
+    const rows = await response.json().catch(() => []);
+    if (!response.ok || !Array.isArray(rows)) return;
+    industryCapacity = rows;
+    if (state.page === "industries") render();
+  } catch { /* Selection still works; the server enforces capacity on confirmation. */ }
+}
+
+function remainingIndustrySeats(name) {
+  return industryCapacity.find(item => item.industry === name)?.remaining;
+}
+
+function syncRoundWaitUI() {
+  const countdown = document.querySelector("#roundWaitCountdown");
+  const nextButton = document.querySelector('[data-action="next-round"]');
+  if (!countdown || !nextButton) return;
+  const remaining = Math.max(0, Number(state.roundWaitUntil || 0) - Date.now());
+  nextButton.disabled = remaining > 0;
+  if (!remaining) {
+    countdown.textContent = "The next flash is available now.";
+    nextButton.textContent = `PROCEED TO ROUND ${state.round + 1} DASHBOARD ➔`;
+    return;
+  }
+  const totalSeconds = Math.ceil(remaining / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  countdown.textContent = `Next flash unlocks in ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.`;
+  nextButton.textContent = "NEXT FLASH LOCKED · WAIT FOR COUNTDOWN";
+}
+
+async function advanceRound() {
+  if (state.isEliminated || state.round >= 4 || Date.now() < Number(state.roundWaitUntil || 0)) return;
+  const button = document.querySelector('[data-action="next-round"]');
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch(`${apiBase()}/team/advance-round`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...teamAuthHeaders() },
+      body: JSON.stringify({ teamId: state.teamId })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (response.status === 401) { expireTeamSession(); return; }
+    if (!response.ok) {
+      if (payload.roundWaitUntil) state.roundWaitUntil = Number(payload.roundWaitUntil);
+      throw new Error(payload.error || "Could not open the next round.");
+    }
+    state.round = Number(payload.team?.round) || state.round + 1;
+    state.roundWaitUntil = 0;
+    state.page = "game";
+    state.allocations = {};
+    ensureRoundAllocations();
+    trackActivity("round-opened", `Moved to Flash ${state.round}.`);
+    save();
+    showPage("game");
+  } catch (error) {
+    if (button) button.disabled = false;
+    const countdown = document.querySelector("#roundWaitCountdown");
+    if (countdown) countdown.textContent = error.message;
   }
 }
 
@@ -424,7 +496,7 @@ function renderLogin() {
       <div class="front-note">
         <span class="article-label">EVENT RULES</span>
         <p>Choose one industry for four rounds. Start with <b>₹1,000,000</b>; your balance carries forward, with a ₹250,000 bonus before Flash 2 and Flash 3. Download each industry dataset and invest the full round budget across ten parameters, with a ₹1,000 minimum per parameter.</p>
-        <p class="monitoring-notice">Event integrity notice: team activity, window focus changes, and detected screenshot shortcuts are logged for organizer review. The site does not capture your screen, camera, or audio.</p>
+        <p class="monitoring-notice">A “Screenshot” alert is logged when the game window loses focus. This can have other causes and does not confirm a screenshot. The site does not capture your screen, camera, or audio.</p>
       </div>
     </div>
     <form class="login-form" id="loginForm">
@@ -453,6 +525,7 @@ function renderIndustries() {
     </div>
     <button data-action="confirm-industry" ${state.industry || !sel ? "disabled" : ""}>${state.industry ? "INDUSTRY LOCKED" : "CONFIRM & PROCEED TO DASHBOARD ➔"}</button>
   </div>
+  ${state.industrySelectionError ? `<p class="error" role="alert">${esc(state.industrySelectionError)}</p>` : ""}
   <div class="article-grid">
     ${industries.map((ind, i) => {
     const isSelected = sel === ind.name;
@@ -463,8 +536,9 @@ function renderIndustries() {
         </div>
         <h3>${esc(ind.name)}</h3>
         <p>${esc(ind.description)}</p>
-        <button class="choice-button ${isSelected ? "ghost" : ""}" data-action="select-industry" data-industry="${esc(ind.name)}" ${state.industry ? "disabled" : ""}>
-          ${isSelected ? "✓ SELECTED" : "CHOOSE THIS INDUSTRY"}
+        <p class="industry-seats" aria-live="polite">${remainingIndustrySeats(ind.name) === undefined ? "Checking seats…" : `${remainingIndustrySeats(ind.name)} of 20 seats remaining`}</p>
+        <button class="choice-button ${isSelected ? "ghost" : ""}" data-action="select-industry" data-industry="${esc(ind.name)}" ${state.industry || remainingIndustrySeats(ind.name) === 0 ? "disabled" : ""}>
+          ${isSelected ? "✓ SELECTED" : remainingIndustrySeats(ind.name) === 0 ? "NO SEATS LEFT" : "CHOOSE THIS INDUSTRY"}
         </button>
       </article>`;
   }).join("")}
@@ -534,7 +608,7 @@ function renderGame() {
     <li>Read the round flash. The organizer can switch its five-minute lock on or off during the event.</li>
       <li>Download the official dataset for this industry and round.</li>
       <li>Allocate exactly ${money(currentCap)} across the ten parameters, with at least ₹1,000 in each.</li>
-      <li>Submit to calculate your payout and round score.</li>
+    <li>Submit to calculate your payout and round score. After seeing the results, wait 30 minutes before the next flash unlocks.</li>
     </ol>
   </section>
   <section style="border:2px solid var(--red);background:#fdf2f0;padding:20px;margin-bottom:24px;text-align:center">
@@ -623,6 +697,7 @@ function renderResults() {
       ${result.eliminated ? `
         <button data-action="nav" data-page="leaderboard" style="padding:16px 32px;font-size:13px;background:var(--red);border-color:var(--red)">VIEW LEADERBOARD</button>
       ` : result.round < 4 ? `
+        <p id="roundWaitCountdown" class="round-wait-message" role="status"></p>
         <button data-action="next-round" style="padding: 16px 32px; font-size: 13px; background: var(--green); border-color: var(--green);">
           PROCEED TO ROUND ${result.round + 1} DASHBOARD ➔
         </button>
@@ -767,11 +842,14 @@ function closeRound() {
     headline: ev.headline
   };
   state.history.push(result);
+  if (state.companyValue !== finalPayout) state.valueEnteredAt = Date.now() * 1000;
   state.companyValue = finalPayout;
+  state.roundWaitUntil = state.round < 4 && !eliminated ? Date.now() + ROUND_WAIT_MS : 0;
   state.isEliminated = eliminated;
   trackActivity("round-submitted", `Submitted Flash ${state.round}; reported balance ${money(finalPayout)}.`);
   save();
   showPage(state.round === 4 ? "leaderboard" : "results");
+  syncRoundWaitUI();
 }
 
 /* ── 5-Minute Storyline Flash Lock System ─────────────────── */
@@ -904,7 +982,6 @@ document.addEventListener("cut", e => { if (activeEvent()) e.preventDefault(); }
 document.addEventListener("paste", e => { if (activeEvent()) e.preventDefault(); });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
-    trackActivity("tab-hidden", "Game tab became hidden; this can indicate a tab switch or capture tool.");
     coverFlashContent(true);
   } else {
     coverFlashContent(false);
@@ -914,7 +991,7 @@ document.addEventListener("visibilitychange", () => {
 window.addEventListener("blur", () => {
   if (state.teamId && Date.now() - lastBlurActivityAt > 2500) {
     lastBlurActivityAt = Date.now();
-    trackActivity("window-blur", "Game window lost focus; this can indicate a tab switch or capture tool.");
+    trackActivity("window-blur", "Game window lost focus. This may indicate a screenshot or another app switch; it is not proof of a screenshot.");
   }
 });
 window.addEventListener("focus", () => {
@@ -973,6 +1050,7 @@ document.addEventListener("click", event => {
 
   if (act === "select-industry") {
     if (state.industry) return;
+    state.industrySelectionError = "";
     state.pendingIndustry = btn.dataset.industry;
     save();
     render();
@@ -980,13 +1058,28 @@ document.addEventListener("click", event => {
   }
   if (act === "confirm-industry") {
     if (state.industry) { showPage("game"); return; }
-    if (state.pendingIndustry) state.industry = state.pendingIndustry;
-    if (!state.industry) return;
-    state.pendingIndustry = null;
-    state.allocations = {};
-    ensureRoundAllocations();
-    save();
-    showPage("game");
+    if (!state.pendingIndustry || btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = "RESERVING INDUSTRY SEAT…";
+    fetch(`${apiBase()}/team/industry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...teamAuthHeaders() },
+      body: JSON.stringify({ teamId: state.teamId, industry: state.pendingIndustry })
+    }).then(async response => {
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401) { expireTeamSession(); return; }
+      if (!response.ok) throw new Error(payload.error || "Could not reserve this industry seat.");
+      industryCapacity = payload.industryCapacity || industryCapacity;
+      state.industry = payload.team?.industry || state.pendingIndustry;
+      state.pendingIndustry = null;
+      state.allocations = {};
+      ensureRoundAllocations();
+      save();
+      showPage("game");
+    }).catch(error => {
+      state.industrySelectionError = error.message;
+      render();
+    });
     return;
   }
   // Open Flash modal guarantees modal triggers
@@ -1014,11 +1107,7 @@ document.addEventListener("click", event => {
 
   // Round progression
   if (act === "next-round") {
-    if (state.isEliminated || state.round >= 4) return;
-    state.round += 1;
-    trackActivity("round-opened", `Moved to Flash ${state.round}.`);
-    save();
-    showPage("game");
+    advanceRound();
     return;
   }
 
@@ -1076,6 +1165,7 @@ document.addEventListener("submit", async event => {
       }
     }
     state.teamId = remoteTeam?.teamId || teamId;
+    state.valueEnteredAt = Number(remoteTeam?.valueEnteredAt) || state.valueEnteredAt || Date.now() * 1000;
     const savedPage = remoteTeam?.page || state.resumePage || state.page;
     if (!state.industry) {
       state.page = "industries";
@@ -1154,8 +1244,6 @@ document.addEventListener("change", event => {
   clearTimeout(allocationSaveTimer);
   allocationSaveTimer = null;
   persistState();
-  const parameter = event.target.dataset.allocation;
-  trackActivity("allocation-updated", `Set ${parameter} allocation to ${money(state.allocations[parameter])}.`);
 });
 
 /* ── Boot Initializer ────────────────────────────────────── */
@@ -1163,6 +1251,9 @@ if (!state.page) state = { ...defaults };
 if (state.teamId && !hasTeamSession()) state.page = "login";
 render();
 syncEventOverlay();
+refreshIndustryCapacity();
+setInterval(() => { if (state.page === "industries") refreshIndustryCapacity(); }, 10000);
+setInterval(syncRoundWaitUI, 1000);
 refreshFlashTimerSettings();
 setInterval(() => {
   if (state.teamId && savedActiveFlash()) refreshFlashTimerSettings();

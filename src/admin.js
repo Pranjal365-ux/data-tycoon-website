@@ -12,6 +12,7 @@ const connectionState = document.querySelector("#connectionState");
 const teamsBody = document.querySelector("#teamsBody");
 const activityFeed = document.querySelector("#activityFeed");
 const activityFilter = document.querySelector("#activityFilter");
+const industryFilter = document.querySelector("#industryFilter");
 const flashTimerStatus = document.querySelector("#flashTimerStatus");
 const flashTimerDescription = document.querySelector("#flashTimerDescription");
 const flashTimerToggle = document.querySelector("#flashTimerToggle");
@@ -20,6 +21,7 @@ let refreshTimer = null;
 let lastTeamsSnapshot = "";
 let lastActivitiesSnapshot = "";
 let flashTimerEnabled = null;
+let currentTeams = [];
 
 const money = amount => `₹${Math.round(Number(amount) || 0).toLocaleString("en-IN")}`;
 const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -81,6 +83,7 @@ loginForm.addEventListener("submit", async event => {
 document.querySelector("#logoutButton").addEventListener("click", signOut);
 document.querySelector("#refreshButton").addEventListener("click", refreshDashboard);
 activityFilter.addEventListener("change", refreshDashboard);
+industryFilter.addEventListener("change", () => { lastTeamsSnapshot = ""; renderTeams(currentTeams); });
 
 function renderFlashTimer(setting) {
   if (typeof setting?.enabled !== "boolean") return;
@@ -115,9 +118,16 @@ flashTimerToggle.addEventListener("click", async () => {
   }
 });
 
-function renderTeams(teams) {
-  const snapshot = JSON.stringify(teams);
-  if (snapshot === lastTeamsSnapshot) return;
+function renderIndustryOptions(capacity = []) {
+  const selected = industryFilter.value;
+  industryFilter.innerHTML = `<option value="">All industries</option>${capacity.map(item => `<option value="${escapeHtml(item.industry)}">${escapeHtml(item.industry)} · ${Number(item.remaining) || 0} seats left</option>`).join("")}`;
+  if ([...industryFilter.options].some(option => option.value === selected)) industryFilter.value = selected;
+}
+
+function renderTeams(teams, force = false) {
+  currentTeams = teams;
+  const snapshot = `${JSON.stringify(teams)}|${industryFilter.value}`;
+  if (!force && snapshot === lastTeamsSnapshot) return;
   // Polling runs every two seconds; don't replace the row while an organizer is typing,
   // or their input and cursor disappear before they can apply the new balance.
   const focusedInput = teamsBody.contains(document.activeElement)
@@ -132,12 +142,13 @@ function renderTeams(teams) {
   document.querySelector("#onlineCount").textContent = teams.filter(team => team.online).length;
   document.querySelector("#combinedBalance").textContent = money(teams.reduce((sum, team) => sum + Number(team.companyValue || 0), 0));
 
-  if (!teams.length) {
+  const visibleTeams = industryFilter.value ? teams.filter(team => team.industry === industryFilter.value) : teams;
+  if (!visibleTeams.length) {
     teamsBody.innerHTML = `<tr><td colspan="7" class="empty">No teams have connected yet.</td></tr>`;
     return;
   }
 
-  teamsBody.innerHTML = teams.map((team, index) => `<tr>
+  teamsBody.innerHTML = visibleTeams.map((team, index) => `<tr>
     <td class="rank">${index + 1}</td>
     <td class="team-name">${escapeHtml(team.teamId)}</td>
     <td>${escapeHtml(team.industry || "—")}</td>
@@ -152,21 +163,20 @@ function renderActivities(items) {
   const snapshot = JSON.stringify(items);
   if (snapshot === lastActivitiesSnapshot) return;
   lastActivitiesSnapshot = snapshot;
-  const signalKinds = new Set(["screenshot-shortcut", "window-blur", "tab-hidden", "clipboard-shortcut"]);
   const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
-  const recentSignals = items.filter(item => signalKinds.has(item.kind) && Date.parse(item.timestamp) >= tenMinutesAgo).length;
+  const recentSignals = items.filter(item => item.kind === "window-blur" && Date.parse(item.timestamp) >= tenMinutesAgo).length;
   document.querySelector("#signalCount").textContent = recentSignals;
   if (!items.length) {
     activityFeed.innerHTML = `<p class="empty">No activity has been reported yet.</p>`;
     return;
   }
   activityFeed.innerHTML = items.map(item => {
-    const alert = signalKinds.has(item.kind);
+    const alert = item.kind === "window-blur";
     const time = Date.parse(item.timestamp);
     const timeText = Number.isFinite(time) ? new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
     return `<article class="activity-item ${alert ? "alert" : ""}">
       <div class="activity-top"><span class="activity-team">${escapeHtml(item.teamId || "Team")}</span><time class="activity-time">${escapeHtml(timeText)}</time></div>
-      <span class="activity-kind">${escapeHtml(item.kind || "activity")}</span>
+      <span class="activity-kind">${alert ? "Screenshot" : escapeHtml(item.kind || "activity")}</span>
       <p class="activity-detail">${escapeHtml(item.detail || "")}</p>
     </article>`;
   }).join("");
@@ -177,6 +187,7 @@ async function refreshDashboard() {
   refreshBusy = true;
   try {
     const dashboard = await api(`/admin/dashboard${activityFilter.value ? `?teamId=${encodeURIComponent(activityFilter.value)}` : ""}`);
+    renderIndustryOptions(dashboard.industryCapacity || []);
     renderTeams(dashboard.teams || []);
     renderActivities(dashboard.activities || []);
     renderFlashTimer(dashboard.flashTimer);
@@ -189,7 +200,7 @@ async function refreshDashboard() {
     dashboardError.textContent = `${error.message} (API: ${API_BASE})`;
   } finally {
     refreshBusy = false;
-    if (getToken()) refreshTimer = setTimeout(refreshDashboard, 5000);
+    if (getToken()) refreshTimer = setTimeout(refreshDashboard, 2000);
   }
 }
 
