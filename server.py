@@ -257,6 +257,7 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 return
             query = parse_qs(parsed.query)
             filter_team = query.get("teamId", [""])[0].casefold()
+            filter_industry = clean_text(query.get("industry", [""])[0], 80)
             with STORE_LOCK:
                 data = read_store()
             now = time.time()
@@ -266,9 +267,12 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
             ]
             teams.sort(key=lambda team: (-float(team.get("companyValue", 0)), int(team.get("valueEnteredAt") or 2**63), team.get("teamId", "").casefold()))
             activities = data["activities"]
-            activities = [item for item in activities if item.get("kind") == "window-blur"]
+            activities = [item for item in activities if item.get("kind") == "screenshot-shortcut"]
             if filter_team:
                 activities = [item for item in activities if item.get("teamId", "").casefold() == filter_team]
+            if filter_industry:
+                industry_teams = {team_key(team["teamId"]) for team in data["teams"].values() if team.get("industry") == filter_industry}
+                activities = [item for item in activities if team_key(item.get("teamId", "")) in industry_teams]
             timer = data.get("settings", {}).get("flashTimer", {})
             round_wait = data.get("settings", {}).get("roundWait", {})
             return self.send_json(200, {
@@ -283,11 +287,16 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 return
             query = parse_qs(parsed.query)
             filter_team = query.get("teamId", [""])[0].casefold()
+            filter_industry = clean_text(query.get("industry", [""])[0], 80)
             with STORE_LOCK:
-                activities = list(read_store()["activities"])
-            activities = [item for item in activities if item.get("kind") == "window-blur"]
+                data = read_store()
+                activities = list(data["activities"])
+            activities = [item for item in activities if item.get("kind") == "screenshot-shortcut"]
             if filter_team:
                 activities = [item for item in activities if item.get("teamId", "").casefold() == filter_team]
+            if filter_industry:
+                industry_teams = {team_key(team["teamId"]) for team in data["teams"].values() if team.get("industry") == filter_industry}
+                activities = [item for item in activities if team_key(item.get("teamId", "")) in industry_teams]
             return self.send_json(200, activities[-250:][::-1])
         return super().do_GET()
 

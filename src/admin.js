@@ -12,6 +12,7 @@ const connectionState = document.querySelector("#connectionState");
 const teamsBody = document.querySelector("#teamsBody");
 const activityFeed = document.querySelector("#activityFeed");
 const activityFilter = document.querySelector("#activityFilter");
+const activityIndustryFilter = document.querySelector("#activityIndustryFilter");
 const industryFilter = document.querySelector("#industryFilter");
 const flashTimerStatus = document.querySelector("#flashTimerStatus");
 const flashTimerDescription = document.querySelector("#flashTimerDescription");
@@ -87,6 +88,7 @@ loginForm.addEventListener("submit", async event => {
 document.querySelector("#logoutButton").addEventListener("click", signOut);
 document.querySelector("#refreshButton").addEventListener("click", refreshDashboard);
 activityFilter.addEventListener("change", refreshDashboard);
+activityIndustryFilter.addEventListener("change", refreshDashboard);
 industryFilter.addEventListener("change", () => { lastTeamsSnapshot = ""; renderTeams(currentTeams); });
 
 function renderFlashTimer(setting) {
@@ -157,8 +159,11 @@ roundWaitToggle.addEventListener("click", async () => {
 
 function renderIndustryOptions(capacity = []) {
   const selected = industryFilter.value;
+  const selectedActivityIndustry = activityIndustryFilter.value;
   industryFilter.innerHTML = `<option value="">All industries</option>${capacity.map(item => `<option value="${escapeHtml(item.industry)}">${escapeHtml(item.industry)} · ${Number(item.remaining) || 0} seats left</option>`).join("")}`;
+  activityIndustryFilter.innerHTML = `<option value="">All industries</option>${capacity.map(item => `<option value="${escapeHtml(item.industry)}">${escapeHtml(item.industry)}</option>`).join("")}`;
   if ([...industryFilter.options].some(option => option.value === selected)) industryFilter.value = selected;
+  if ([...activityIndustryFilter.options].some(option => option.value === selectedActivityIndustry)) activityIndustryFilter.value = selectedActivityIndustry;
 }
 
 function renderTeams(teams, force = false) {
@@ -201,19 +206,19 @@ function renderActivities(items) {
   if (snapshot === lastActivitiesSnapshot) return;
   lastActivitiesSnapshot = snapshot;
   const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
-  const recentSignals = items.filter(item => item.kind === "window-blur" && Date.parse(item.timestamp) >= tenMinutesAgo).length;
+  const recentSignals = items.filter(item => item.kind === "screenshot-shortcut" && Date.parse(item.timestamp) >= tenMinutesAgo).length;
   document.querySelector("#signalCount").textContent = recentSignals;
   if (!items.length) {
     activityFeed.innerHTML = `<p class="empty">No activity has been reported yet.</p>`;
     return;
   }
   activityFeed.innerHTML = items.map(item => {
-    const alert = item.kind === "window-blur";
+    const alert = item.kind === "screenshot-shortcut";
     const time = Date.parse(item.timestamp);
     const timeText = Number.isFinite(time) ? new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
     return `<article class="activity-item ${alert ? "alert" : ""}">
       <div class="activity-top"><span class="activity-team">${escapeHtml(item.teamId || "Team")}</span><time class="activity-time">${escapeHtml(timeText)}</time></div>
-      <span class="activity-kind">${alert ? "Screenshot" : escapeHtml(item.kind || "activity")}</span>
+      <span class="activity-kind">${alert ? "Screenshot shortcut signal" : escapeHtml(item.kind || "activity")}</span>
       <p class="activity-detail">${escapeHtml(item.detail || "")}</p>
     </article>`;
   }).join("");
@@ -223,7 +228,10 @@ async function refreshDashboard() {
   if (!getToken() || refreshBusy) return;
   refreshBusy = true;
   try {
-    const dashboard = await api(`/admin/dashboard${activityFilter.value ? `?teamId=${encodeURIComponent(activityFilter.value)}` : ""}`);
+    const activityParams = new URLSearchParams();
+    if (activityFilter.value) activityParams.set("teamId", activityFilter.value);
+    if (activityIndustryFilter.value) activityParams.set("industry", activityIndustryFilter.value);
+    const dashboard = await api(`/admin/dashboard${activityParams.size ? `?${activityParams}` : ""}`);
     renderIndustryOptions(dashboard.industryCapacity || []);
     renderTeams(dashboard.teams || []);
     renderActivities(dashboard.activities || []);

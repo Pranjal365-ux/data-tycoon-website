@@ -460,6 +460,7 @@ async def handle_api(request: Request) -> Response:
         if not admin_authorized(request):
             return json_response({"error": "Organizer sign-in required."}, 401)
         filter_team = request.query_params.get("teamId", "").casefold()
+        filter_industry = clean_text(request.query_params.get("industry", ""), 80)
         try:
             db = mongo_database()
             now = time.time()
@@ -474,9 +475,18 @@ async def handle_api(request: Request) -> Response:
                 dict(row, online=now - float(row.get("lastSeenEpoch", 0)) < 45)
                 for row in rows
             ]
-            query = {"kind": "window-blur"}
+            query = {"kind": "screenshot-shortcut"}
             if filter_team:
                 query["teamKey"] = filter_team
+            if filter_industry:
+                industry_team_keys = [
+                    team_key(row["teamId"])
+                    for row in db.data_tycoon_teams.find({"industry": filter_industry}, {"_id": 0, "teamId": 1})
+                ]
+                if filter_team and filter_team not in industry_team_keys:
+                    query["teamKey"] = {"$in": []}
+                elif not filter_team:
+                    query["teamKey"] = {"$in": industry_team_keys}
             activities = list(
                 db.data_tycoon_activities.find(query, {"_id": 0, "teamKey": 0})
                 .sort("_id", DESCENDING)
@@ -510,11 +520,21 @@ async def handle_api(request: Request) -> Response:
         if not admin_authorized(request):
             return json_response({"error": "Organizer sign-in required."}, 401)
         filter_team = request.query_params.get("teamId", "").casefold()
+        filter_industry = clean_text(request.query_params.get("industry", ""), 80)
         try:
             db = mongo_database()
-            query = {"kind": "window-blur"}
+            query = {"kind": "screenshot-shortcut"}
             if filter_team:
                 query["teamKey"] = filter_team
+            if filter_industry:
+                industry_team_keys = [
+                    team_key(row["teamId"])
+                    for row in db.data_tycoon_teams.find({"industry": filter_industry}, {"_id": 0, "teamId": 1})
+                ]
+                if filter_team and filter_team not in industry_team_keys:
+                    query["teamKey"] = {"$in": []}
+                elif not filter_team:
+                    query["teamKey"] = {"$in": industry_team_keys}
             rows = list(db.data_tycoon_activities.find(query, {"_id": 0, "teamKey": 0}).sort("_id", DESCENDING).limit(250))
             return json_response(rows)
         except Exception:

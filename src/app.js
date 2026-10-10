@@ -50,7 +50,6 @@ let renderedEventId = null;
 let allocationSaveTimer = null;
 let teamSyncTimer = null;
 let remoteMoneyPollBusy = false;
-let lastBlurActivityAt = 0;
 let teamLoginNotice = "";
 let flashTimerSettings = { enabled: true, changedAt: 0 };
 let flashTimerSettingsLoaded = false;
@@ -523,7 +522,7 @@ function renderLogin() {
       <div class="front-note">
         <span class="article-label">EVENT RULES</span>
         <p>Choose one industry for four rounds. Start with <b>₹1,000,000</b>; your balance carries forward, with a ₹250,000 bonus before Flash 2 and Flash 3. Download each industry dataset and invest the full round budget across ten parameters, with a ₹1,000 minimum per parameter.</p>
-        <p class="monitoring-notice">A “Screenshot” alert is logged when the game window loses focus. This can have other causes and does not confirm a screenshot. The site does not capture your screen, camera, or audio.</p>
+        <p class="monitoring-notice">The organizer may receive a signal if the browser detects a screenshot shortcut during a flash. Tab switches are not reported as screenshots. Some operating system screenshot methods cannot be detected by a website.</p>
       </div>
     </div>
     <form class="login-form" id="loginForm">
@@ -1017,12 +1016,6 @@ document.addEventListener("visibilitychange", () => {
     syncEventOverlay();
   }
 });
-window.addEventListener("blur", () => {
-  if (state.teamId && Date.now() - lastBlurActivityAt > 2500) {
-    lastBlurActivityAt = Date.now();
-    trackActivity("window-blur", "Game window lost focus. This may indicate a screenshot or another app switch; it is not proof of a screenshot.");
-  }
-});
 window.addEventListener("focus", () => {
   if (document.hidden) return;
   syncEventOverlay();
@@ -1031,24 +1024,14 @@ document.addEventListener("keydown", event => {
   const key = event.key.toLowerCase();
   const printShortcut = (event.ctrlKey || event.metaKey) && key === "p";
   const saveShortcut = (event.ctrlKey || event.metaKey) && !event.shiftKey && key === "s";
-  const screenshotShortcut = event.key === "PrintScreen" || (event.metaKey && event.shiftKey && key === "s");
+  const screenshotShortcut = event.key === "PrintScreen"
+    || ((event.metaKey || event.ctrlKey) && event.shiftKey && ["s", "3", "4", "5", "#", "$", "%"].includes(key));
   if (!printShortcut && !saveShortcut && !screenshotShortcut) return;
   event.preventDefault();
-  if (activeEvent()) {
-    trackActivity(
-      printShortcut ? "print-shortcut" : saveShortcut ? "save-shortcut" : "screenshot-shortcut",
-      printShortcut
-        ? "Detected a print or save-as-PDF shortcut during a flash."
-        : saveShortcut
-          ? "Detected a save-page shortcut during a flash."
-        : `Detected ${event.key === "PrintScreen" ? "Print Screen" : "Windows/Meta + Shift + S"} shortcut.`
-    );
+  if (activeEvent() && screenshotShortcut) {
+    trackActivity("screenshot-shortcut", `Detected ${event.key === "PrintScreen" ? "Print Screen" : "Shift + screenshot key"} shortcut during a flash.`);
   }
 }, true);
-
-window.addEventListener("beforeprint", () => {
-  if (activeEvent()) trackActivity("print-dialog", "The browser opened its print dialog during a flash.");
-});
 
 /* ── Global Event Delegation ─────────────────────────────── */
 document.addEventListener("copy", event => event.preventDefault(), true);
