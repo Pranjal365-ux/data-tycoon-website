@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#f5edda" />
   <title>Organizer Portal | Data Tycoon</title>
-  <link rel="stylesheet" href="./src/admin.css?v=3" />
+  <link rel="stylesheet" href="./src/admin.css?v=4" />
 </head>
 <body>
   <header class="admin-header">
@@ -38,6 +38,11 @@
         <div class="flash-timer-action"><strong id="flashTimerStatus">LOADING</strong><button id="flashTimerToggle" class="button-secondary" type="button" disabled>LOADING</button></div>
       </section>
 
+      <section class="panel flash-timer-control round-wait-control" aria-labelledby="roundWaitHeading">
+        <div><p class="eyebrow">NEXT ROUND ACCESS</p><h2 id="roundWaitHeading">30-minute round wait</h2><p id="roundWaitDescription" class="muted">Loading round wait setting…</p></div>
+        <div class="flash-timer-action"><strong id="roundWaitStatus">LOADING</strong><button id="roundWaitToggle" class="button-secondary" type="button" disabled>LOADING</button></div>
+      </section>
+
       <section class="stats-grid" aria-label="Event summary">
         <article class="stat-card"><span>TEAMS</span><strong id="teamCount">0</strong></article>
         <article class="stat-card"><span>ONLINE NOW</span><strong id="onlineCount">0</strong></article>
@@ -47,7 +52,8 @@
 
       <div class="content-grid">
         <section class="panel team-panel">
-          <div class="panel-heading"><div><p class="eyebrow">LIVE STANDINGS</p><h2>Leaderboard and balances</h2></div><div class="admin-filters"><select id="industryFilter" aria-label="Filter teams by industry"><option value="">All industries</option></select><button id="refreshButton" class="button-secondary" type="button">REFRESH</button></div></div>
+          <div class="panel-heading"><div><p class="eyebrow">LIVE STANDINGS</p><h2>Leaderboard and balances</h2></div><button id="refreshButton" class="button-secondary" type="button">REFRESH</button></div>
+          <div class="team-filter-bar"><label for="industryFilter">FILTER TEAMS AND BALANCES BY INDUSTRY</label><select id="industryFilter" aria-label="Filter teams by industry"><option value="">All industries</option></select></div>
           <div class="table-wrap">
             <table>
               <thead><tr><th>#</th><th>TEAM</th><th>INDUSTRY</th><th>ROUND</th><th>BALANCE</th><th>STATUS</th><th>SET BALANCE</th></tr></thead>
@@ -66,6 +72,6 @@
     </section>
   </main>
   <script>window.DATA_TYCOON_API_BASE = "";</script>
-  <script type="module" src="./src/admin.js?v=7"></script>
+  <script type="module" src="./src/admin.js?v=8"></script>
 </body>
 </html>

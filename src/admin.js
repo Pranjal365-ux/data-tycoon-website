@@ -16,11 +16,15 @@ const industryFilter = document.querySelector("#industryFilter");
 const flashTimerStatus = document.querySelector("#flashTimerStatus");
 const flashTimerDescription = document.querySelector("#flashTimerDescription");
 const flashTimerToggle = document.querySelector("#flashTimerToggle");
+const roundWaitStatus = document.querySelector("#roundWaitStatus");
+const roundWaitDescription = document.querySelector("#roundWaitDescription");
+const roundWaitToggle = document.querySelector("#roundWaitToggle");
 let refreshBusy = false;
 let refreshTimer = null;
 let lastTeamsSnapshot = "";
 let lastActivitiesSnapshot = "";
 let flashTimerEnabled = null;
+let roundWaitEnabled = null;
 let currentTeams = [];
 
 const money = amount => `₹${Math.round(Number(amount) || 0).toLocaleString("en-IN")}`;
@@ -118,6 +122,39 @@ flashTimerToggle.addEventListener("click", async () => {
   }
 });
 
+function renderRoundWait(setting) {
+  if (typeof setting?.enabled !== "boolean") return;
+  roundWaitEnabled = setting.enabled;
+  roundWaitStatus.textContent = roundWaitEnabled ? "ON · 30-MINUTE WAIT" : "OFF · NEXT ROUND OPEN";
+  roundWaitStatus.classList.toggle("off", !roundWaitEnabled);
+  roundWaitDescription.textContent = roundWaitEnabled
+    ? "Teams must wait 30 minutes after submitting each round before advancing."
+    : "Teams can advance as soon as they submit. Turning this back on enforces the 30-minute wait for teams that have not advanced.";
+  roundWaitToggle.textContent = roundWaitEnabled ? "REMOVE ROUND WAIT" : "TURN ROUND WAIT ON";
+  roundWaitToggle.setAttribute("aria-pressed", String(roundWaitEnabled));
+  roundWaitToggle.disabled = false;
+}
+
+roundWaitToggle.addEventListener("click", async () => {
+  if (typeof roundWaitEnabled !== "boolean") return;
+  roundWaitToggle.disabled = true;
+  dashboardError.textContent = "";
+  try {
+    const setting = await api("/admin/settings/round-wait", {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: !roundWaitEnabled })
+    });
+    renderRoundWait(setting);
+    dashboardError.textContent = setting.enabled
+      ? "The 30-minute wait is on for future round submissions."
+      : "The 30-minute wait is off. Teams currently waiting can advance now.";
+  } catch (error) {
+    dashboardError.textContent = error.message;
+  } finally {
+    roundWaitToggle.disabled = false;
+  }
+});
+
 function renderIndustryOptions(capacity = []) {
   const selected = industryFilter.value;
   industryFilter.innerHTML = `<option value="">All industries</option>${capacity.map(item => `<option value="${escapeHtml(item.industry)}">${escapeHtml(item.industry)} · ${Number(item.remaining) || 0} seats left</option>`).join("")}`;
@@ -191,6 +228,7 @@ async function refreshDashboard() {
     renderTeams(dashboard.teams || []);
     renderActivities(dashboard.activities || []);
     renderFlashTimer(dashboard.flashTimer);
+    renderRoundWait(dashboard.roundWait);
     connectionState.textContent = "LIVE";
     connectionState.classList.remove("offline");
     dashboardError.textContent = "";

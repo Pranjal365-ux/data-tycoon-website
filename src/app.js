@@ -55,6 +55,9 @@ let teamLoginNotice = "";
 let flashTimerSettings = { enabled: true, changedAt: 0 };
 let flashTimerSettingsLoaded = false;
 let flashTimerSettingsBusy = false;
+let roundWaitSettings = { enabled: true, changedAt: 0 };
+let roundWaitSettingsLoaded = false;
+let roundWaitSettingsBusy = false;
 
 /* ── Persistence ─────────────────────────────────────────── */
 function loadState() {
@@ -273,6 +276,26 @@ async function refreshFlashTimerSettings() {
   }
 }
 
+async function refreshRoundWaitSettings() {
+  if (roundWaitSettingsBusy) return;
+  roundWaitSettingsBusy = true;
+  try {
+    const response = await fetch(`${apiBase()}/settings/round-wait`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Round wait settings request failed (${response.status})`);
+    const next = await response.json();
+    if (typeof next.enabled !== "boolean") throw new Error("Round wait setting is invalid.");
+    const changed = roundWaitSettings.enabled !== next.enabled
+      || roundWaitSettings.changedAt !== Number(next.changedAt || 0);
+    roundWaitSettings = { enabled: next.enabled, changedAt: Number(next.changedAt || 0) };
+    roundWaitSettingsLoaded = true;
+    if (changed) syncRoundWaitUI();
+  } catch {
+    // Keep the 30-minute wait enabled if settings cannot be reached.
+  } finally {
+    roundWaitSettingsBusy = false;
+  }
+}
+
 async function syncOrganizerMoney() {
   if (!state.teamId || !hasTeamSession() || remoteMoneyPollBusy) return;
   remoteMoneyPollBusy = true;
@@ -331,10 +354,14 @@ function syncRoundWaitUI() {
   const countdown = document.querySelector("#roundWaitCountdown");
   const nextButton = document.querySelector('[data-action="next-round"]');
   if (!countdown || !nextButton) return;
-  const remaining = Math.max(0, Number(state.roundWaitUntil || 0) - Date.now());
+  const remaining = roundWaitSettingsLoaded && !roundWaitSettings.enabled
+    ? 0
+    : Math.max(0, Number(state.roundWaitUntil || 0) - Date.now());
   nextButton.disabled = remaining > 0;
   if (!remaining) {
-    countdown.textContent = "The next flash is available now.";
+    countdown.textContent = roundWaitSettingsLoaded && !roundWaitSettings.enabled
+      ? "The organizer has removed the 30-minute wait. The next flash is available now."
+      : "The next flash is available now.";
     nextButton.textContent = `PROCEED TO ROUND ${state.round + 1} DASHBOARD ➔`;
     return;
   }
@@ -347,7 +374,7 @@ function syncRoundWaitUI() {
 }
 
 async function advanceRound() {
-  if (state.isEliminated || state.round >= 4 || Date.now() < Number(state.roundWaitUntil || 0)) return;
+  if (state.isEliminated || state.round >= 4 || ((!roundWaitSettingsLoaded || roundWaitSettings.enabled) && Date.now() < Number(state.roundWaitUntil || 0))) return;
   const button = document.querySelector('[data-action="next-round"]');
   if (button) button.disabled = true;
   try {
@@ -844,7 +871,9 @@ function closeRound() {
   state.history.push(result);
   if (state.companyValue !== finalPayout) state.valueEnteredAt = Date.now() * 1000;
   state.companyValue = finalPayout;
-  state.roundWaitUntil = state.round < 4 && !eliminated ? Date.now() + ROUND_WAIT_MS : 0;
+  state.roundWaitUntil = state.round < 4 && !eliminated && (!roundWaitSettingsLoaded || roundWaitSettings.enabled)
+    ? Date.now() + ROUND_WAIT_MS
+    : 0;
   state.isEliminated = eliminated;
   trackActivity("round-submitted", `Submitted Flash ${state.round}; reported balance ${money(finalPayout)}.`);
   save();
@@ -1255,6 +1284,8 @@ refreshIndustryCapacity();
 setInterval(() => { if (state.page === "industries") refreshIndustryCapacity(); }, 10000);
 setInterval(syncRoundWaitUI, 1000);
 refreshFlashTimerSettings();
+refreshRoundWaitSettings();
+setInterval(refreshRoundWaitSettings, 5000);
 setInterval(() => {
   if (state.teamId && savedActiveFlash()) refreshFlashTimerSettings();
 }, 5000);

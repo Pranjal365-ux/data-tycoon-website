@@ -197,6 +197,13 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 "enabled": bool(setting.get("enabled", False)),
                 "changedAt": int(setting.get("changedAt", 0)),
             })
+        if path == "/api/settings/round-wait":
+            with STORE_LOCK:
+                setting = read_store().get("settings", {}).get("roundWait", {})
+            return self.send_json(200, {
+                "enabled": bool(setting.get("enabled", True)),
+                "changedAt": int(setting.get("changedAt", 0)),
+            })
         if path == "/api/industry-capacity":
             with STORE_LOCK:
                 teams = read_store()["teams"]
@@ -263,10 +270,12 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
             if filter_team:
                 activities = [item for item in activities if item.get("teamId", "").casefold() == filter_team]
             timer = data.get("settings", {}).get("flashTimer", {})
+            round_wait = data.get("settings", {}).get("roundWait", {})
             return self.send_json(200, {
                 "teams": teams,
                 "activities": activities[-100:][::-1],
                 "flashTimer": {"enabled": bool(timer.get("enabled", False)), "changedAt": int(timer.get("changedAt", 0))},
+                "roundWait": {"enabled": bool(round_wait.get("enabled", True)), "changedAt": int(round_wait.get("changedAt", 0))},
                 "industryCapacity": industry_capacity(data["teams"]),
             })
         if path == "/api/admin/activities":
@@ -328,13 +337,16 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 previous = data["teams"].get(key, {})
                 incoming_history = body.get("history") if isinstance(body.get("history"), list) else []
                 previous_round = int(previous.get("round", 1))
+                round_wait_enabled = bool(data.get("settings", {}).get("roundWait", {}).get("enabled", True))
                 previous_rounds = {item.get("round") for item in previous.get("history", []) if isinstance(item, dict)}
                 has_new_result = any(item.get("round") not in previous_rounds for item in incoming_history if isinstance(item, dict))
                 if round_number > previous_round and (
                     round_number != previous_round + 1
                     or not any(isinstance(item, dict) and item.get("round") == previous_round for item in previous.get("history", []))
-                    or not int(previous.get("roundWaitUntil", 0) or 0)
-                    or int(previous.get("roundWaitUntil", 0) or 0) > time.time() * 1000
+                    or (round_wait_enabled and (
+                        not int(previous.get("roundWaitUntil", 0) or 0)
+                        or int(previous.get("roundWaitUntil", 0) or 0) > time.time() * 1000
+                    ))
                 ):
                     return self.send_json(409, {"error": "Complete the round and wait 30 minutes before opening the next flash."})
                 preserve_override = previous.get("adminOverride") and not has_new_result
@@ -343,8 +355,10 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 if not entered_at or (not preserve_override and balance != previous.get("companyValue")):
                     entered_at = time.time_ns() // 1000
                 wait_until = int(previous.get("roundWaitUntil", 0) or 0)
-                if has_new_result and round_number < 4 and not bool(body.get("isEliminated")):
+                if round_wait_enabled and has_new_result and round_number < 4 and not bool(body.get("isEliminated")):
                     wait_until = max(wait_until, int(time.time() * 1000) + 30 * 60 * 1000)
+                elif not round_wait_enabled:
+                    wait_until = 0
                 revision = int(previous.get("moneyRevision", 0))
                 team = {
                     **previous,
@@ -400,13 +414,14 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 if not team:
                     return self.send_json(404, {"error": "Team not found."})
                 wait_until = int(team.get("roundWaitUntil", 0) or 0)
+                wait_enabled = bool(data.get("settings", {}).get("roundWait", {}).get("enabled", True))
                 current_round = int(team.get("round", 1))
                 submitted = any(isinstance(item, dict) and item.get("round") == current_round for item in team.get("history", []))
-                if submitted and current_round < 4 and not team.get("isEliminated") and wait_until <= 0:
+                if wait_enabled and submitted and current_round < 4 and not team.get("isEliminated") and wait_until <= 0:
                     wait_until = int(time.time() * 1000) + 30 * 60 * 1000
                     team["roundWaitUntil"] = wait_until
                     write_store(data)
-                if int(time.time() * 1000) < wait_until:
+                if wait_enabled and int(time.time() * 1000) < wait_until:
                     return self.send_json(409, {"error": "The 30-minute wait before the next flash has not finished.", "roundWaitUntil": wait_until})
                 if current_round >= 4 or team.get("isEliminated"):
                     return self.send_json(409, {"error": "This team cannot open another round."})
@@ -469,6 +484,28 @@ class DataTycoonHandler(SimpleHTTPRequestHandler):
                 settings["flashTimer"] = {"enabled": enabled, "changedAt": changed_at}
                 write_store(data)
             return self.send_json(200, settings["flashTimer"])
+
+        if path == "/api/admin/settings/round-wait":
+            if not self.admin_authorized():
+                return
+            try:
+                body = self.read_json()
+            except (ValueError, json.JSONDecodeError) as error:
+                return self.send_json(400, {"error": str(error)})
+            enabled = body.get("enabled")
+            if not isinstance(enabled, bool):
+                return self.send_json(400, {"error": "Round wait enabled must be true or false."})
+            with STORE_LOCK:
+                data = read_store()
+                settings = data.setdefault("settings", {})
+                previous = settings.get("roundWait", {})
+                changed_at = int(time.time() * 1000) if bool(previous.get("enabled", True)) != enabled else int(previous.get("changedAt", 0))
+                settings["roundWait"] = {"enabled": enabled, "changedAt": changed_at}
+                if not enabled:
+                    for team in data["teams"].values():
+                        team["roundWaitUntil"] = 0
+                write_store(data)
+            return self.send_json(200, settings["roundWait"])
 
         prefix = "/api/admin/teams/"
         if not path.startswith(prefix) or not path.endswith("/money"):

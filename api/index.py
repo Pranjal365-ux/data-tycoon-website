@@ -187,6 +187,11 @@ def flash_timer_settings(db) -> dict:
     return {"enabled": bool(row.get("enabled", False)), "changedAt": int(row.get("changedAt", 0))}
 
 
+def round_wait_settings(db) -> dict:
+    row = db.data_tycoon_settings.find_one({"_id": "round-wait"}) or {}
+    return {"enabled": bool(row.get("enabled", True)), "changedAt": int(row.get("changedAt", 0))}
+
+
 def session_secret() -> str:
     return os.environ.get("ADMIN_SESSION_SECRET") or os.environ.get("ADMIN_PASSWORD", "")
 
@@ -384,6 +389,12 @@ async def handle_api(request: Request) -> Response:
         except Exception:
             return json_response({"error": "Could not load flash timer settings."}, 503)
 
+    if method == "GET" and route == "settings/round-wait":
+        try:
+            return json_response(round_wait_settings(mongo_database()))
+        except Exception:
+            return json_response({"error": "Could not load round wait settings."}, 503)
+
     if method == "POST" and route == "admin/login":
         try:
             body = await request_json(request)
@@ -471,7 +482,7 @@ async def handle_api(request: Request) -> Response:
                 .sort("_id", DESCENDING)
                 .limit(100)
             )
-            return json_response({"teams": teams, "activities": activities, "flashTimer": flash_timer_settings(db), "industryCapacity": industry_capacity(db)})
+            return json_response({"teams": teams, "activities": activities, "flashTimer": flash_timer_settings(db), "roundWait": round_wait_settings(db), "industryCapacity": industry_capacity(db)})
         except Exception:
             return json_response({"error": "Database unavailable. Check MONGODB_URI."}, 503)
 
@@ -537,6 +548,7 @@ async def handle_api(request: Request) -> Response:
                 return json_response({"error": "Invalid team balance or round."}, 400)
             try:
                 db = mongo_database()
+                wait_enabled = round_wait_settings(db)["enabled"]
                 previous = load_team(db, team_key(team_id)) or {}
                 previous_round = int(previous.get("round", 1))
                 incoming_history = body.get("history") if isinstance(body.get("history"), list) else []
@@ -547,8 +559,10 @@ async def handle_api(request: Request) -> Response:
                 if round_number > previous_round and (
                     round_number != previous_round + 1
                     or not any(isinstance(item, dict) and item.get("round") == previous_round for item in previous.get("history", []))
-                    or not previous.get("roundWaitUntil")
-                    or previous.get("roundWaitUntil", 0) > time.time() * 1000
+                    or (wait_enabled and (
+                        not previous.get("roundWaitUntil")
+                        or previous.get("roundWaitUntil", 0) > time.time() * 1000
+                    ))
                 ):
                     return json_response({"error": "Complete the round and wait 30 minutes before opening the next flash."}, 409)
                 preserve_override = previous.get("adminOverride") and not has_new_result
@@ -557,8 +571,10 @@ async def handle_api(request: Request) -> Response:
                 if not entered_at or (not preserve_override and balance != previous.get("companyValue")):
                     entered_at = time.time_ns() // 1000
                 wait_until = int(previous.get("roundWaitUntil", 0) or 0)
-                if has_new_result and round_number < 4 and not bool(body.get("isEliminated")):
+                if wait_enabled and has_new_result and round_number < 4 and not bool(body.get("isEliminated")):
                     wait_until = max(wait_until, int(time.time() * 1000) + 30 * 60 * 1000)
+                elif not wait_enabled:
+                    wait_until = 0
                 team = {
                     **previous,
                     "teamId": team_id,
@@ -616,6 +632,7 @@ async def handle_api(request: Request) -> Response:
                 return json_response({"error": "Team sign-in required. Enter the team PIN again."}, 401)
             try:
                 db = mongo_database()
+                wait_enabled = round_wait_settings(db)["enabled"]
                 now = int(time.time() * 1000)
                 team = db.data_tycoon_teams.find_one({"_id": team_key(team_id)})
                 if not team:
@@ -623,17 +640,20 @@ async def handle_api(request: Request) -> Response:
                 wait_until = int(team.get("roundWaitUntil", 0) or 0)
                 current_round = int(team.get("round", 1))
                 submitted = any(isinstance(item, dict) and item.get("round") == current_round for item in team.get("history", []))
-                if submitted and current_round < 4 and not team.get("isEliminated") and wait_until <= 0:
+                if wait_enabled and submitted and current_round < 4 and not team.get("isEliminated") and wait_until <= 0:
                     wait_until = now + 30 * 60 * 1000
                     db.data_tycoon_teams.update_one({"_id": team_key(team_id)}, {"$set": {"roundWaitUntil": wait_until}})
-                if now < wait_until:
+                if wait_enabled and now < wait_until:
                     return json_response({"error": "The 30-minute wait before the next flash has not finished.", "roundWaitUntil": wait_until}, 409)
                 if current_round >= 4 or team.get("isEliminated"):
                     return json_response({"error": "This team cannot open another round."}, 409)
                 if not submitted:
                     return json_response({"error": "Submit this round before opening the next flash."}, 409)
+                advance_filter = {"_id": team_key(team_id), "round": current_round}
+                if wait_enabled:
+                    advance_filter["roundWaitUntil"] = {"$lte": now}
                 updated = db.data_tycoon_teams.find_one_and_update(
-                    {"_id": team_key(team_id), "round": current_round, "roundWaitUntil": {"$lte": now}},
+                    advance_filter,
                     {"$set": {"round": current_round + 1, "roundWaitUntil": 0, "page": "game", "updatedAt": utc_now(), "lastSeenEpoch": time.time()}},
                     return_document=ReturnDocument.AFTER,
                 )
@@ -698,6 +718,31 @@ async def handle_api(request: Request) -> Response:
             return json_response({"enabled": enabled, "changedAt": changed_at})
         except Exception:
             return json_response({"error": "Could not update flash timer settings."}, 503)
+
+    if method == "PATCH" and route == "admin/settings/round-wait":
+        if not admin_authorized(request):
+            return json_response({"error": "Organizer sign-in required."}, 401)
+        try:
+            body = await request_json(request)
+        except (ValueError, json.JSONDecodeError) as error:
+            return json_response({"error": str(error)}, 400)
+        enabled = body.get("enabled")
+        if not isinstance(enabled, bool):
+            return json_response({"error": "Round wait enabled must be true or false."}, 400)
+        try:
+            db = mongo_database()
+            existing = db.data_tycoon_settings.find_one({"_id": "round-wait"}) or {}
+            changed_at = int(time.time() * 1000) if bool(existing.get("enabled", True)) != enabled else int(existing.get("changedAt", 0))
+            db.data_tycoon_settings.update_one(
+                {"_id": "round-wait"},
+                {"$set": {"enabled": enabled, "changedAt": changed_at}},
+                upsert=True,
+            )
+            if not enabled:
+                db.data_tycoon_teams.update_many({}, {"$set": {"roundWaitUntil": 0}})
+            return json_response({"enabled": enabled, "changedAt": changed_at})
+        except Exception:
+            return json_response({"error": "Could not update round wait settings."}, 503)
 
     if method == "PATCH" and route.startswith("admin/teams/") and route.endswith("/money"):
         if not admin_authorized(request):
