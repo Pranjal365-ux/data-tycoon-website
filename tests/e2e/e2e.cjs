@@ -117,7 +117,8 @@ async function signIn(page, teamId, pin) {
     await page.click("#confirmOk");
     await page.waitForSelector(".market-tape");
     assert((await page.textContent("#utilityStatus")).includes("Food"), "utility bar missing industry");
-    assert((await page.textContent("#statusText")).includes("Flash timer: Off"), "status strip should show the timer setting");
+    assert((await page.textContent("#statusText")).includes("Flash timer: Off"), "ticker should show the timer setting");
+    assert((await page.textContent("#datelineEdition")).includes("Food edition"), "dateline missing");
     await page.screenshot({ path: `${SHOTS}/03-round.png`, fullPage: true });
   });
 
@@ -226,6 +227,9 @@ async function signIn(page, teamId, pin) {
     assert((await inputs[0].inputValue()) === "3000", `arrow keys gave ${await inputs[0].inputValue()}`);
     await inputs[0].fill("500");
     assert((await page.textContent("#allocMessage")).includes("at least"), "minimum not flagged");
+    await page.click('[data-action="split-evenly"]');
+    assert((await page.textContent("#allocMessage")).includes("Ready to submit"), "split evenly should produce a valid allocation");
+    assert((await page.textContent('[data-pretty="1"]')).includes("₹1,00,000"), "readable amount missing");
     for (const input of inputs.slice(0, 9)) await input.fill("100000");
     await inputs[9].fill("1000");
     await page.click('[data-action="fill-rest"][data-index="9"]');
@@ -237,6 +241,11 @@ async function signIn(page, teamId, pin) {
     await page.waitForSelector(".results-card");
     assert(await page.isVisible('[data-countdown="wait"]'), "wait countdown missing");
     await page.screenshot({ path: `${SHOTS}/08-results.png`, fullPage: true });
+    const order = await page.$$eval(".results-card > *", nodes => nodes.map(node => node.className.split(" ")[0]));
+    const at = name => order.indexOf(name);
+    assert(at("news-story") === 0 && at("result-highlight") < at("company-chart-card") && at("company-chart-card") < at("next-round-desk") && at("next-round-desk") < at("table-title"), `results order: ${order.join(",")}`);
+    assert((await page.textContent(".story-headline")).includes(team), "story headline missing team");
+    assert(await page.isVisible(".row-tag.best") && await page.isVisible(".row-tag.worst"), "best/weakest tags missing");
   });
 
   await check("organizer removing the wait opens the next round live (no reload)", async () => {

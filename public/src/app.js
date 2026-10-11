@@ -154,7 +154,10 @@ async function refreshLeaderboard(force = false) {
     const changed = JSON.stringify(rows) !== JSON.stringify(ui.leaderboard);
     ui.leaderboard = Array.isArray(rows) ? rows : [];
     ui.leaderboardAt = Date.now();
-    if (changed && ["leaderboard", "round", "results"].includes(ui.view)) requestRender(true);
+    if (changed) {
+      renderStatusStrip();
+      if (["leaderboard", "round", "results"].includes(ui.view)) requestRender(true);
+    }
   } catch { /* Keep showing the last copy. */ }
 }
 
@@ -247,6 +250,7 @@ function render() {
   $("#signOut").hidden = !signedIn;
   renderUtility();
   renderStatusStrip();
+  renderDateline();
   const steps = $("#steps");
   steps.hidden = !signedIn;
   steps.innerHTML = signedIn ? renderSteps() : "";
@@ -284,13 +288,27 @@ function renderStatusStrip() {
     return;
   }
   strip.hidden = false;
-  const timer = team.settings.flashTimer.enabled ? "On (5 minutes)" : "Off";
-  const wait = team.settings.roundWait.enabled ? "On (30 minutes)" : "Off";
-  $("#statusText").innerHTML = [
-    team.industry ? `<span>Round <b>${team.round} of ${team.rounds}</b></span>` : "",
-    `<span>Flash timer: <b>${timer}</b></span>`,
-    `<span>Wait between rounds: <b>${wait}</b></span>`
-  ].filter(Boolean).join("");
+  const items = [];
+  (ui.leaderboard || []).slice(0, 5).forEach((row, index) => {
+    const me = row.teamId.toLowerCase() === team.teamId.toLowerCase();
+    items.push(`<span class="${me ? "ticker-me" : ""}"><b>${index + 1}. ${esc(row.teamId)}</b> ${money(row.companyValue)}</span>`);
+  });
+  const rank = myRank();
+  if (rank && rank.rank > 5) items.push(`<span class="ticker-me"><b>${rank.rank}. ${esc(team.teamId)}</b> ${money(team.companyValue)}</span>`);
+  items.push(`<span>Flash timer: <b>${team.settings.flashTimer.enabled ? "On (5 min)" : "Off"}</b></span>`);
+  items.push(`<span>Wait between rounds: <b>${team.settings.roundWait.enabled ? "On (30 min)" : "Off"}</b></span>`);
+  const html = items.join('<i aria-hidden="true">◆</i>');
+  const track = $("#statusText");
+  if (track.dataset.html === html) return;
+  track.dataset.html = html;
+  // Two copies make the scroll loop seamless; the second is hidden from screen readers.
+  track.innerHTML = `<span class="ticker-run">${html}<i aria-hidden="true">◆</i></span><span class="ticker-run" aria-hidden="true">${html}<i aria-hidden="true">◆</i></span>`;
+}
+
+function renderDateline() {
+  const date = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  $("#datelineDate").textContent = date;
+  $("#datelineEdition").textContent = team?.industry ? `${team.industry} edition · Round ${team.round} of ${team.rounds}` : "TechTatva '26 · MIT Manipal";
 }
 
 function renderLoading() {
@@ -470,7 +488,11 @@ function renderRound() {
   const budgetNote = team.bonus
     ? `${money(team.budget - team.bonus)} + ${money(team.bonus)} bonus`
     : team.round === 1 ? "Same for every team" : "Carried from last round";
+  const deck = team.finished ? "" : team.submitted
+    ? "Your investments for this round are locked in."
+    : `Read the news, check the data, then decide where your ${money(team.budget)} goes.`;
   const head = `${pageHeading(`${esc(team.industry)} · Round ${team.round} of 4`, `Round ${team.round}`)}
+  ${deck ? `<p class="standfirst">${deck}</p>` : ""}
   <div class="market-tape">
     <div><small>Money to invest</small><b class="tape-budget">${money(team.budget)}</b><em>${budgetNote}</em></div>
     <div><small>Your rank</small><b class="tape-rank">${rank ? `#${rank.rank}` : "…"}</b><em>${rank ? `of ${rank.total} team${rank.total === 1 ? "" : "s"}` : "Loading"}</em></div>
@@ -501,34 +523,67 @@ function renderRound() {
 function renderAllocation(enabled, current) {
   const rows = team.parameters.map((name, index) => `<tr>
     <td class="alloc-param"><strong>${esc(name)}</strong><small>${index < 5 ? "All industries" : `${esc(team.industry)} only`}</small></td>
-    <td class="alloc-rule"><span data-share="${index}">0.0%</span> of your money</td>
+    <td class="alloc-rule"><span class="pretty" data-pretty="${index}">₹0</span><span class="share-line"><span data-share="${index}">0.0%</span> of your money</span></td>
     <td class="allocation-input-cell align-right"><span class="rupee">₹</span><input type="number" inputmode="numeric" min="${team.minAllocation}" step="1000" data-param="${esc(name)}" aria-label="Amount for ${esc(name)}" placeholder="0" ${enabled ? "" : "disabled"}><button type="button" class="fill-rest" data-action="fill-rest" data-index="${index}" title="Add everything that is still left to invest to this area" ${enabled ? "" : "disabled"}>+ Rest</button></td>
   </tr>`).join("");
   return `<section class="allocation-section desk-section" id="allocation">
     ${stepHeader(3, `Invest ${money(team.budget)}`, team.submitted, current)}
     <p class="allocation-intro">Put money into all ten areas, at least ${money(team.minAllocation)} each, so the total is exactly ${money(team.budget)}. Some areas pay off more than others this round, and piling too much into one area can backfire.</p>
-    <div class="alloc-tools"><span class="hint">Arrows change amounts by ₹1,000. “+ Rest” adds whatever is left.</span><button type="button" class="ghost" data-action="clear-allocation" ${enabled ? "" : "disabled"}>Clear all</button></div>
+    <div class="alloc-tools"><span class="hint">Arrows change amounts by ₹1,000. “+ Rest” adds whatever is left.</span><span class="alloc-tool-buttons"><button type="button" class="ghost" data-action="split-evenly" ${enabled ? "" : "disabled"}>Split evenly</button><button type="button" class="ghost" data-action="clear-allocation" ${enabled ? "" : "disabled"}>Clear all</button></span></div>
     <div class="table-scroll"><table class="alloc-table"><thead><tr><th>Area</th><th>Share</th><th class="align-right">Amount</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="alloc-totals">
-      <div><span>Money to invest</span><b>${money(team.budget)}</b></div>
-      <div><span>Invested so far</span><b id="allocTotal">₹0</b></div>
-      <div><span>Left to invest</span><b id="allocRemaining">${money(team.budget)}</b></div>
+    <div class="alloc-sticky">
+      <div class="alloc-totals">
+        <div><span>Money to invest</span><b>${money(team.budget)}</b></div>
+        <div><span>Invested so far</span><b id="allocTotal">₹0</b></div>
+        <div><span>Left to invest</span><b id="allocRemaining">${money(team.budget)}</b></div>
+      </div>
+      <div class="alloc-submit-row">
+        <div id="allocMessage" class="total invalid">${enabled ? "" : !team.flashCompleted ? "🔒 Read the news flash first (Step 1)." : `🔒 Download the Round ${team.round} data first (Step 2).`}</div>
+        <button type="button" id="submitRound" class="submit-round" data-action="submit-round" disabled>Submit Round ${team.round}</button>
+      </div>
     </div>
-    <div id="allocMessage" class="total invalid">${enabled ? "" : !team.flashCompleted ? "🔒 Read the news flash first (Step 1)." : `🔒 Download the Round ${team.round} data first (Step 2).`}</div>
-    <button type="button" id="submitRound" class="submit-round" data-action="submit-round" disabled>Submit Round ${team.round}</button>
   </section>`;
 }
 
 /* ── 4. Results ── */
+function resultExtremes(result) {
+  const rows = Object.entries(result.allocations || {}).map(([name, amount]) => ({ name, amount: Number(amount), returned: Number(result.returns?.[name] || 0) }));
+  if (!rows.length || result.eliminated) return { best: null, worst: null };
+  const ratio = row => (row.amount ? row.returned / row.amount : 0);
+  const sorted = [...rows].sort((x, y) => ratio(y) - ratio(x) || y.returned - x.returned);
+  return { best: sorted[0], worst: sorted.at(-1) };
+}
+
 function resultRows(result) {
+  const { best, worst } = resultExtremes(result);
   return Object.entries(result.allocations || {}).map(([name, amount]) => {
     const returned = Number(result.returns?.[name] || 0);
-    return `<tr><td><b>${esc(name)}</b></td><td>${((Number(amount) / (result.budget || 1)) * 100).toFixed(1)}%</td><td>${money(amount)}</td><td class="${returned >= Number(amount) ? "returned-up" : "returned-down"}">${money(returned)}</td></tr>`;
+    const tag = best?.name === name ? '<span class="row-tag best">Best</span>' : worst?.name === name ? '<span class="row-tag worst">Weakest</span>' : "";
+    return `<tr><td><b>${esc(name)}</b>${tag}</td><td>${((Number(amount) / (result.budget || 1)) * 100).toFixed(1)}%</td><td>${money(amount)}</td><td class="${returned >= Number(amount) ? "returned-up" : "returned-down"}">${money(returned)}</td></tr>`;
   }).join("");
 }
 
 function resultTable(result) {
   return `<div class="table-scroll"><table class="result-table"><thead><tr><th>Area</th><th>Share</th><th>Invested</th><th>Got back</th></tr></thead><tbody>${resultRows(result)}</tbody></table></div>`;
+}
+
+function resultStory(result) {
+  const pct = result.budget ? Math.abs(result.netProfit / result.budget * 100).toFixed(1) : "0.0";
+  const { best, worst } = resultExtremes(result);
+  const headline = result.eliminated
+    ? `${team.teamId} disqualified in Round ${result.round}`
+    : result.netProfit > 0 ? `${team.teamId} grows its money by ${pct}% in Round ${result.round}`
+    : result.netProfit < 0 ? `A tough Round ${result.round}: ${team.teamId} slips ${pct}%`
+    : `${team.teamId} breaks even in Round ${result.round}`;
+  let lede = `Round ${result.round} has closed. ${team.teamId} invested ${money(result.budget)} across ten areas of the ${team.industry} market and got back ${money(result.payout)}.`;
+  if (result.eliminated) lede += " More than 80% of the money went into an area that returns nothing, so the round paid nothing.";
+  else if (best && worst) lede += ` The best call was ${best.name}, which turned ${money(best.amount)} into ${money(best.returned)}. ${worst.name} was the weakest, returning ${money(worst.returned)}.`;
+  return `<article class="news-story results-story">
+    <span class="article-label">${esc(team.industry)} · Round ${result.round} report</span>
+    <h2 class="story-headline">${esc(headline)}</h2>
+    <p class="byline">By the Data Tycoon desk · ${new Date(result.submittedAt || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>
+    <p class="lede">${esc(lede)}</p>
+  </article>`;
 }
 
 function renderResults() {
@@ -553,6 +608,7 @@ function renderResults() {
   const older = team.history.slice(0, -1).reverse().map(item => `<details class="past-round"><summary><span>Round ${item.round} · got back ${money(item.payout)}</span><span class="${item.netProfit >= 0 ? "returned-up" : "returned-down"}">${item.netProfit >= 0 ? "+" : ""}${money(item.netProfit)}</span></summary>${resultTable(item)}</details>`).join("");
   return `${pageHeading(`${esc(team.industry)} · Round ${latest.round}`, latest.eliminated ? "Disqualified" : `Round ${latest.round} results`)}
   <section class="results-card">
+    ${resultStory(latest)}
     <div class="result-highlight">
       <div class="result-figures">
         <div><span>You got back</span><strong>${money(latest.payout)}</strong></div>
@@ -560,13 +616,12 @@ function renderResults() {
         <div><span>Your rank</span><strong>${rank ? `#${rank.rank}` : "…"}</strong><em>${rank ? `of ${rank.total} team${rank.total === 1 ? "" : "s"}` : ""}</em></div>
       </div>
       <p class="result-notes">You invested ${money(latest.budget)}${latest.bonus ? `, including the ${money(latest.bonus)} bonus` : ""}.${latest.payout < 0 ? " Balances can't go below ₹0, so you now have ₹0." : ""}</p>
-      ${latest.eliminated ? `<p class="form-error">More than 80% of the money went into an area that returns nothing, so this round pays nothing and your team is out of the game.</p>` : ""}
     </div>
+    ${companyValueChart("Your company's value")}
     <div class="next-round-desk">${next}</div>
     <h3 class="table-title">Where your money went</h3>
     ${resultTable(latest)}
   </section>
-  ${companyValueChart()}
   ${older ? `<h3 class="table-title">Earlier rounds</h3>${older}` : ""}`;
 }
 
@@ -580,7 +635,15 @@ function renderLeaderboard() {
       const badge = index === 0 ? "🥇 1st" : index === 1 ? "🥈 2nd" : index === 2 ? "🥉 3rd" : `#${index + 1}`;
       return `<tr class="${me ? "me" : ""}"><td class="rank-cell"><b>${badge}</b></td><td><b>${esc(row.teamId)}</b>${me ? ' <span class="you">You</span>' : ""}</td><td>${esc(row.industry || "-")}</td><td>${row.isEliminated ? "Out" : `Round ${row.round}`}</td><td class="balance">${money(row.companyValue)}</td></tr>`;
     }).join("");
+  const leader = rows?.[0];
+  const rank = myRank();
+  const story = leader ? `<article class="news-story lead-story">
+    <span class="article-label">Live standings</span>
+    <h2 class="story-headline">${esc(leader.teamId)} leads the field with ${money(leader.companyValue)}</h2>
+    <p class="lede">There ${rows.length === 1 ? "is one team" : `are ${rows.length} teams`} in the game so far.${rank ? rank.rank === 1 ? " Your team is on top. Keep it there." : ` Your team is #${rank.rank}, ${money(Math.max(0, leader.companyValue - team.companyValue))} behind the leader.` : ""}</p>
+  </article>` : "";
   return `${pageHeading("TechTatva '26", "Leaderboard")}
+  ${story}
   <div class="leaderboard-box">
     <div class="table-scroll"><table><thead><tr><th>Rank</th><th>Team</th><th>Industry</th><th>Progress</th><th class="align-right">Money</th></tr></thead><tbody>${body}</tbody></table></div>
   </div>
@@ -634,6 +697,8 @@ function updateAllocation() {
     const valid = raw !== "" && Number.isInteger(value) && value >= team.minAllocation;
     allValid = allValid && valid;
     input.classList.toggle("invalid", raw !== "" && !valid);
+    const pretty = document.querySelector(`[data-pretty="${index}"]`);
+    if (pretty) pretty.textContent = raw !== "" && Number.isFinite(value) ? money(value) : "₹0";
     const share = document.querySelector(`[data-share="${index}"]`);
     if (share) share.textContent = `${Number.isFinite(value) && raw !== "" && team.budget > 0 ? ((value / team.budget) * 100).toFixed(1) : "0.0"}%`;
   });
@@ -885,6 +950,15 @@ document.addEventListener("click", async event => {
     $("input[data-param]:not(:disabled)")?.focus({ preventScroll: true });
     return;
   }
+  if (action === "split-evenly") {
+    const inputs = [...document.querySelectorAll("input[data-param]")];
+    if (!inputs.length || inputs[0].disabled) return;
+    const each = Math.floor(team.budget / inputs.length / 1000) * 1000;
+    inputs.forEach((input, index) => { input.value = String(index === 0 ? team.budget - each * (inputs.length - 1) : each); });
+    updateAllocation();
+    saveDraft();
+    return;
+  }
   if (action === "clear-allocation") {
     document.querySelectorAll("input[data-param]").forEach(input => { input.value = ""; });
     try { localStorage.removeItem(draftKey()); } catch { /* ignore */ }
@@ -946,7 +1020,7 @@ function tick() {
 
 setInterval(tick, 1000);
 setInterval(() => {
-  if (team && !document.hidden && ["leaderboard", "round", "results"].includes(ui.view)) refreshLeaderboard();
+  if (team && !document.hidden) refreshLeaderboard();
 }, LEADERBOARD_REFRESH_MS);
 
 document.addEventListener("visibilitychange", () => { if (!document.hidden && session) poll(); });

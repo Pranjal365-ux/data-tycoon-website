@@ -8,12 +8,12 @@
   <title>The Daily Data | Data Tycoon</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
   <link rel="preload" href="./fonts/libre-baskerville-normal-400.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="./src/fonts.css?v=60" />
-  <link rel="stylesheet" href="./src/styles.css?v=60" />
-  <link rel="stylesheet" href="./src/editorial.css?v=60" />
-  <link rel="stylesheet" href="./src/gameflow.css?v=60" />
-  <link rel="stylesheet" href="./src/newsroom.css?v=60" />
-  <script type="module" src="./src/app.js?v=60"></script>
+  <link rel="stylesheet" href="./src/fonts.css?v=70" />
+  <link rel="stylesheet" href="./src/styles.css?v=70" />
+  <link rel="stylesheet" href="./src/editorial.css?v=70" />
+  <link rel="stylesheet" href="./src/gameflow.css?v=70" />
+  <link rel="stylesheet" href="./src/newsroom.css?v=70" />
+  <script type="module" src="./src/app.js?v=70"></script>
 </head>
 <body>
   <div class="paper-frame" id="appRoot">
@@ -24,8 +24,9 @@
     </div>
     <header class="masthead">
       <div class="brand-lockup"><span class="brand-seal" aria-hidden="true">DT</span><a class="masthead-link" href="/" data-action="home"><h1>DATA TYCOON</h1><p class="subtitle">The business simulation game</p></a><span class="edition-stamp">SPECIAL<br><b>EDITION</b></span></div>
+      <div class="dateline"><span id="datelineDate"></span><span id="datelineEdition">TechTatva '26 · MIT Manipal</span></div>
     </header>
-    <div id="statusStrip" class="breaking-strip status-strip" hidden><b>Game settings</b><span id="statusText"></span></div>
+    <div id="statusStrip" class="breaking-strip status-strip" hidden><b>Live</b><div class="ticker" aria-label="Live standings and game settings"><span id="statusText" class="ticker-track"></span></div></div>
     <nav id="steps" class="desk-tabs" aria-label="Game sections" hidden></nav>
     <main id="page" class="page" tabindex="-1">
       <noscript><p class="lead">Data Tycoon needs JavaScript enabled.</p></noscript>
