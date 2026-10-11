@@ -39,6 +39,8 @@ Local development and production run the same code (`server.py` simply starts `a
 | `Dockerfile`, `.dockerignore` | Always-on container for Azure App Service / Container Apps |
 | `vercel.json`, `.vercelignore` | Vercel deployment |
 | `tests/test_api.py`, `tests/conftest.py` | API tests (needs MongoDB) |
+| `tests/test_migration.py`, `tests/fixtures/legacy_api.py` | Upgrade test: data written by the previous production version keeps working |
+| `scripts/console_url.py` | Prints the organizer console URL from your secrets (runs locally) |
 | `tests/e2e/e2e.cjs` | Browser end-to-end test (Playwright) |
 | `tests/load/load_test.py` | Concurrent load test |
 
@@ -186,9 +188,10 @@ Older team records written by the previous version are read correctly (history, 
 * Scoring, gating, timers and waits are enforced on the server; the browser cannot set its balance, round or history.
 * The answer key, flashes, datasets and console are only under `api/`, which is never served as static content.
 * Team PINs: PBKDF2-SHA256 with a random salt; hashing runs one at a time per process so a sign-in rush cannot stall the game; recent successful checks are remembered in memory using a server-keyed HMAC.
-* Signed tokens (HMAC-SHA256): team tokens last 24 h and are revoked by a PIN reset; organizer tokens last 8 h; a team token is never accepted as an organizer token.
+* One device per team: each sign-in revokes the previous device's token (it is told why).
+* Signed tokens (HMAC-SHA256): team tokens last 24 h and are revoked by a new sign-in or a PIN reset; organizer tokens last 8 h; a team token is never accepted as an organizer token.
 * Rate limits stored in MongoDB (shared across instances): 10 wrong PINs per team per 5 minutes, 30 per IP per minute; organizer 8 per IP per minute and 40 overall per 5 minutes.
-* Console hidden behind a secret path, optional IP allowlist, `noindex`.
+* Console hidden behind a secret path (`ADMIN_CONSOLE_PATH`, or derived from the session secret so it never appears in this public repo; print it with `scripts/console_url.py`), optional IP allowlist, `noindex`.
 * Headers on every response: strict Content-Security-Policy (no third-party hosts), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, COOP.
 
 **Browser, while a flash is open (`guard.js`)**

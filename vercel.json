@@ -4,28 +4,58 @@
   "functions": {
     "api/index.py": {
       "includeFiles": "api/**",
+      "excludeFiles": "{content-src/**,tests/**,docs/**,scripts/**,public/**,.vscode/**,Dockerfile,server.py}",
       "maxDuration": 15
     }
   },
   "rewrites": [
-    { "source": "/api/:path*", "destination": "/api?route=:path*" },
-    { "source": "/:path*", "destination": "/api?route=__site/:path*" }
+    {
+      "source": "/api/:path*",
+      "destination": "/api?route=:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/api?route=__site/$1"
+    }
   ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" },
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "Referrer-Policy", "value": "same-origin" },
-        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), display-capture=()" },
-        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" }
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "same-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), display-capture=()"
+        },
+        {
+          "key": "Cross-Origin-Opener-Policy",
+          "value": "same-origin"
+        }
       ]
     },
     {
       "source": "/src/(.*)",
-      "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }]
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
     }
   ]
 }

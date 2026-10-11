@@ -17,14 +17,23 @@ Several problems compounded each other in the previous version:
 
 | Scenario | Requests | Errors | Teams finished | Poll p50 / p99 | Sign-in during the opening rush |
 |---|---|---|---|---|---|
-| 50 teams x 3 devices (150 devices) | 7,091 | 0 | 50/50 | 10 ms / 1.2 s | 1.3 s median |
-| 100 teams x 3 devices (300 devices) | 13,991 | 0 | 100/100 | 11 ms / 1.1 s | 3.8 s median |
+| 50 teams, one laptop each, **single process** (event setup) | 4,104 | 0 | 50/50 | 11 ms / 2.0 s | 1.2 s median |
+| 50 teams x 3 devices, 2 processes (stress) | 7,091 | 0 | 50/50 | 10 ms / 1.2 s | 1.3 s median |
+| 100 teams x 3 devices, 2 processes (stress) | 13,991 | 0 | 100/100 | 11 ms / 1.1 s | 3.8 s median |
+
+The test squeezes a whole four-round game into about 100 seconds, so the request rate is far higher than during the real event (where each round lasts 30 minutes or more).
 
 The slow percentiles all come from the first few seconds, when every team signs in at once (PIN hashing is deliberately CPU-heavy). After that, every request type had a median under 30 ms.
 
-## Recommended hosting: Azure App Service (always-on container)
+## Which host?
 
-For a single-day event with a known number of players, one always-on server is simpler and more predictable than serverless:
+**For 50 teams, stay on Vercel and upgrade the database tier.** The new code sends a small, steady load (about 10 requests per second with 50 players, mostly single database reads, and public data is cached by Vercel's CDN), so Vercel handles it comfortably. What Vercel cannot fix is a throttled database, so the database tier is the one upgrade that matters. Switching hosts days before the event adds risk without a clear gain at this size.
+
+Azure is the fallback if you see problems on Vercel during the rehearsal, or if you grow well beyond 50 teams. The Docker image is ready for that.
+
+## Alternative hosting: Azure App Service (always-on container)
+
+An always-on server avoids serverless trade-offs:
 
 * No cold starts, and a stable pool of database connections.
 * No 4.5 MB response cap and no per-invocation time limits.
@@ -83,11 +92,11 @@ python server.py              # prints the player and console URLs
 |---|---|---|
 | `ADMIN_PASSWORD` | yes | Organizer password |
 | `ADMIN_SESSION_SECRET` | yes | Long random secret that signs team and organizer sessions. Changing it signs everyone out |
-| `ADMIN_CONSOLE_PATH` | yes | Secret path of the organizer console (16+ characters of letters, digits, `-`, `_`). The console is disabled when unset |
+| `ADMIN_CONSOLE_PATH` | no | Secret path of the organizer console (16+ characters of letters, digits, `-`, `_`). When unset, a path derived from the session secret is used (see `scripts/console_url.py`) |
 | `ADMIN_ALLOWED_IPS` | no | Comma-separated IPs or CIDR ranges allowed to open the console |
 | `MONGODB_URI` | yes | MongoDB connection string |
 | `MONGODB_DATABASE` | no | Database name (default `data_tycoon`) |
-| `MONGODB_MAX_POOL_SIZE` | no | Connections per process (default 20) |
+| `MONGODB_MAX_POOL_SIZE` | no | Connections per process (default 5 on Vercel, 20 elsewhere) |
 | `WEB_CONCURRENCY` | no | Gunicorn worker processes in Docker (default 2) |
 
 Generate secrets with:
@@ -99,9 +108,11 @@ python -c "import secrets; print('ops-' + secrets.token_urlsafe(18))"   # consol
 
 ## The organizer console
 
-* The console lives only at `https://<domain>/<ADMIN_CONSOLE_PATH>/`. There is no link to it anywhere on the player site, `/admin` and `/admin.html` return 404, and every `/api/admin/*` endpoint answers 404 unless the request carries the console path. The page is marked `noindex`.
+* **Finding the URL.** If `ADMIN_CONSOLE_PATH` is set, the console is at `https://<domain>/<ADMIN_CONSOLE_PATH>/`. If it is not set, the path is derived from `ADMIN_SESSION_SECRET` (or `ADMIN_PASSWORD` when no session secret exists), so no URL is ever written into this public repository. Print it on your own computer with `python scripts/console_url.py`. Changing the password or secret changes the derived URL.
+* The console lives only at that secret path. There is no link to it anywhere on the player site, `/admin` and `/admin.html` return 404, and every `/api/admin/*` endpoint answers 404 unless the request carries the console path. The page is marked `noindex`.
 * Share the URL only with the organizing team. To change it, update `ADMIN_CONSOLE_PATH` and redeploy.
 * Organizer sign-in is rate limited (8 failed attempts per IP per minute, 40 overall per 5 minutes).
+* **One device per team.** Signing in on a new device signs the team's previous device out (it shows a message explaining why). A wrong PIN never signs anyone out.
 * **Reset PIN** signs out every device of that team. The next PIN the team enters becomes their new PIN, so ask the team to sign in right away.
 
 ## Before the event checklist

@@ -148,9 +148,10 @@ async function refreshLeaderboard(force = false) {
   if (!force && Date.now() - ui.leaderboardAt < LEADERBOARD_REFRESH_MS / 2) return;
   try {
     const rows = await api("/leaderboard", { auth: false });
+    const changed = JSON.stringify(rows) !== JSON.stringify(ui.leaderboard);
     ui.leaderboard = Array.isArray(rows) ? rows : [];
     ui.leaderboardAt = Date.now();
-    if (["leaderboard", "round", "results"].includes(ui.view)) requestRender(true);
+    if (changed && ["leaderboard", "round", "results"].includes(ui.view)) requestRender(true);
   } catch { /* Keep showing the last copy. */ }
 }
 
@@ -400,7 +401,9 @@ function renderRound() {
       ${team.submitted ? `<button type="button" class="button" data-action="nav" data-view="results">View results</button>` : ""}
     </li>
   </ol>
-  ${team.submitted ? "" : renderAllocation(canInvest)}`}`;
+  ${team.submitted ? "" : team.budget < team.minAllocation * team.parameters.length
+    ? `<section class="card center"><h2>Your budget is too small to invest this round</h2><p>Every parameter needs at least ${money(team.minAllocation)}, so a round needs ${money(team.minAllocation * team.parameters.length)}. Please speak to an organizer.</p></section>`
+    : renderAllocation(canInvest)}`}`;
 }
 
 function renderAllocation(enabled) {
@@ -468,10 +471,11 @@ function renderResults() {
   ${next}
   <section class="card result-card">
     <div class="result-numbers">
-      <div><span>Payout (your new balance)</span><b>${money(latest.payout)}</b></div>
+      <div><span>Round payout</span><b class="${latest.payout < 0 ? "bad" : ""}">${money(latest.payout)}</b></div>
       <div><span>Profit this round</span><b class="${profit >= 0 ? "good" : "bad"}">${profit >= 0 ? "+" : ""}${money(profit)}</b></div>
       <div><span>Budget invested</span><b>${money(latest.budget)}</b></div>
     </div>
+    ${latest.payout < 0 ? `<p class="muted">Balances cannot go below ₹0, so your balance is now ₹0.</p>` : ""}
     ${latest.bonus ? `<p class="muted">Includes the ${money(latest.bonus)} round bonus in the budget.</p>` : ""}
     ${latest.eliminated ? `<p class="form-error">More than 80% of the budget went into a parameter with no return, so the payout is zero and the team is out of the game.</p>` : ""}
     <h3>Balance over time</h3>
@@ -532,7 +536,7 @@ function updateAllocation() {
     allValid = allValid && valid;
     input.classList.toggle("invalid", raw !== "" && !valid);
     const share = document.querySelector(`[data-share="${index}"]`);
-    if (share) share.textContent = `${Number.isFinite(value) && raw !== "" ? ((value / team.budget) * 100).toFixed(1) : "0"}%`;
+    if (share) share.textContent = `${Number.isFinite(value) && raw !== "" && team.budget > 0 ? ((value / team.budget) * 100).toFixed(1) : "0"}%`;
   });
   const left = team.budget - total;
   $("#allocTotal").textContent = money(total);

@@ -31,7 +31,7 @@ from urllib.parse import parse_qsl, urlencode
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
-from pymongo.errors import DuplicateKeyError, PyMongoError
+from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _rules as rules  # noqa: E402
@@ -99,9 +99,18 @@ def session_secret() -> str:
     return env("ADMIN_SESSION_SECRET") or env("ADMIN_PASSWORD")
 
 
+def derived_console_path(secret: str) -> str:
+    """Secret-derived console path, so no URL needs to live in this public repo."""
+    digest = hmac.new(secret.encode(), b"data-tycoon-organizer-console-v1", hashlib.sha256).hexdigest()
+    return f"ops-{digest[:24]}"
+
+
 def console_path() -> str:
     value = env("ADMIN_CONSOLE_PATH").strip("/")
-    return value if CONSOLE_PATH_PATTERN.match(value) else ""
+    if value:
+        return value if CONSOLE_PATH_PATTERN.match(value) else ""
+    secret = session_secret()
+    return derived_console_path(secret) if secret else ""
 
 
 # ── Database ─────────────────────────────────────────────────────────────────
@@ -119,25 +128,45 @@ def db():
                 serverSelectionTimeoutMS=5000,
                 connectTimeoutMS=5000,
                 socketTimeoutMS=10000,
-                maxPoolSize=int(env("MONGODB_MAX_POOL_SIZE", "20")),
+                # Serverless instances each hold their own pool, so keep them small there.
+                maxPoolSize=int(env("MONGODB_MAX_POOL_SIZE", "5" if env("VERCEL") else "20")),
                 maxIdleTimeMS=60000,
                 retryWrites=True,
             )
         database = _mongo_client[env("MONGODB_DATABASE", "data_tycoon") or "data_tycoon"]
         if not _indexes_ready:
-            database.data_tycoon_teams.create_index(
-                [("companyValue", DESCENDING), ("valueEnteredAt", ASCENDING), ("teamId", ASCENDING)], name="leaderboard_value_first"
-            )
-            database.data_tycoon_activities.create_index([("teamKey", ASCENDING), ("_id", DESCENDING)], name="activity_team_recent")
-            database.data_tycoon_activities.create_index([("kind", ASCENDING), ("_id", DESCENDING)], name="activity_kind_recent")
-            database.data_tycoon_activities.create_index([("industry", ASCENDING), ("_id", DESCENDING)], name="activity_industry_recent")
-            database.data_tycoon_activities.create_index(
-                "createdAt", expireAfterSeconds=ACTIVITY_RETENTION_DAYS * 86400, name="activity_ttl"
-            )
-            database.data_tycoon_rate_limits.create_index("at", expireAfterSeconds=900, name="rate_limit_ttl")
-            database.data_tycoon_rate_limits.create_index([("key", ASCENDING), ("at", DESCENDING)], name="rate_limit_key")
+            ensure_indexes(database)
             _indexes_ready = True
     return database
+
+
+SCHEMA_VERSION = 2
+INDEXES = [
+    # (collection, keys, options). Names match the ones the previous version
+    # created, so existing production indexes are reused rather than conflicting.
+    ("data_tycoon_teams", [("companyValue", DESCENDING), ("valueEnteredAt", ASCENDING), ("teamId", ASCENDING)], {"name": "leaderboard_value_first"}),
+    ("data_tycoon_activities", [("teamKey", ASCENDING), ("_id", DESCENDING)], {}),
+    ("data_tycoon_activities", [("kind", ASCENDING), ("_id", DESCENDING)], {"name": "activity_kind_recent"}),
+    ("data_tycoon_activities", [("industry", ASCENDING), ("_id", DESCENDING)], {"name": "activity_industry_recent"}),
+    ("data_tycoon_activities", [("createdAt", ASCENDING)], {"name": "activity_ttl", "expireAfterSeconds": ACTIVITY_RETENTION_DAYS * 86400}),
+    ("data_tycoon_rate_limits", [("at", ASCENDING)], {"name": "rate_limit_ttl", "expireAfterSeconds": 900}),
+    ("data_tycoon_rate_limits", [("key", ASCENDING), ("at", DESCENDING)], {"name": "rate_limit_key"}),
+]
+
+
+def ensure_indexes(database) -> None:
+    """Create indexes once per database (one read on later cold starts)."""
+    marker = database.data_tycoon_settings.find_one({"_id": "schema"}) or {}
+    if int(marker.get("version", 0)) >= SCHEMA_VERSION:
+        return
+    for collection, keys, options in INDEXES:
+        try:
+            database[collection].create_index(keys, **options)
+        except OperationFailure as error:
+            # 85/86: an equivalent index already exists under another name or options.
+            if error.code not in (85, 86):
+                raise
+    database.data_tycoon_settings.update_one({"_id": "schema"}, {"$set": {"version": SCHEMA_VERSION}}, upsert=True)
 
 
 def cached(key: str, seconds: float, loader):
@@ -172,7 +201,7 @@ def clean_text(value, limit: int = 160) -> str:
 
 
 def team_key(team_id: str) -> str:
-    return clean_text(team_id, 40).casefold()
+    return clean_text(team_id, 80).casefold()
 
 
 def settings() -> dict:
@@ -319,8 +348,10 @@ def require_team(request: Request) -> dict:
     if not claims or claims.get("scope") != "team":
         raise ApiError(401, "Your team session has ended. Sign in again with your team PIN.")
     team = db().data_tycoon_teams.find_one({"_id": claims.get("teamKey")})
-    if not team or int(team.get("sessionVersion", 0)) != int(claims.get("sv", -1)):
+    if not team:
         raise ApiError(401, "Your team session has ended. Sign in again with your team PIN.")
+    if int(team.get("sessionVersion", 0)) != int(claims.get("sv", -1)):
+        raise ApiError(401, "This device was signed out because your team signed in on another device (only one device per team), or an organizer reset your PIN.")
     return team
 
 
@@ -533,7 +564,7 @@ async def platform_routing(request: Request, call_next):
     query = parse_qsl(request.scope.get("query_string", b"").decode(), keep_blank_values=True)
     route = next((value for key, value in query if key == "route"), None)
     if route is not None:
-        rest = [(key, value) for key, value in query if key != "route"]
+        rest = [(key, value) for key, value in query if key not in ("route", "path")]
         path = "/" + route.lstrip("/")
         if path.startswith("/__site/"):
             path = path[len("/__site"):]
@@ -591,7 +622,7 @@ def capacity_route():
 @app.post("/api/team/connect")
 async def team_connect(request: Request):
     body = await json_body(request)
-    team_id = clean_text(body.get("teamId"), 40)
+    team_id = clean_text(body.get("teamId"), 80)
     pin = str(body.get("pin", ""))
     if len(team_id) < 2:
         raise ApiError(400, "Enter your team name.")
@@ -628,8 +659,11 @@ def connect_team(team_id: str, pin: str, ip: str):
     if not pin_matches(team, pin):
         note_failure(ip_key, team_limit_key)
         raise ApiError(401, "That PIN does not match this team. Check with your teammates and try again.")
-    collection.update_one({"_id": key}, {"$set": {"lastSeenEpoch": time.time()}})
-    record_activity(team, "team-connected", "Signed in.")
+    # One device per team: signing in revokes the token held by any other device.
+    team = collection.find_one_and_update(
+        {"_id": key}, {"$set": {"lastSeenEpoch": time.time()}, "$inc": {"sessionVersion": 1}}, return_document=ReturnDocument.AFTER
+    )
+    record_activity(team, "team-connected", "Signed in (any other device for this team was signed out).")
     token = sign_token({"scope": "team", "teamKey": key, "sv": int(team.get("sessionVersion", 0)), "exp": int(time.time()) + TEAM_TOKEN_TTL})
     return json_response({"token": token, "state": team_view(team)})
 
@@ -784,7 +818,7 @@ async def submit_round(request: Request):
         {
             "$push": {"history": entry},
             "$set": {
-                "companyValue": outcome["payout"],
+                "companyValue": max(0, outcome["payout"]),
                 "valueEnteredAt": time.time_ns() // 1000,
                 "isEliminated": outcome["eliminated"],
                 "roundWaitUntil": submitted_at + rules.ROUND_WAIT_MS if round_number < rules.ROUNDS and not outcome["eliminated"] else 0,

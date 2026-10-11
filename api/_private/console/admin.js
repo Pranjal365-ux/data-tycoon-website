@@ -100,6 +100,7 @@ $("#adminLoginForm").addEventListener("submit", async event => {
 });
 
 $("#logoutButton").addEventListener("click", signOut);
+$("#refreshButton").addEventListener("click", () => { lastTeams = ""; lastActivities = ""; refresh(); });
 ["#activityKind", "#activityIndustryFilter", "#activityFilter"].forEach(id => $(id).addEventListener("change", () => { lastActivities = ""; refresh(); }));
 $("#industryFilter").addEventListener("change", () => { lastTeams = ""; renderTeams(teams); });
 

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="robots" content="noindex, nofollow" />
   <meta name="referrer" content="no-referrer" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <title>Organizer console · Data Tycoon</title>
   <link rel="stylesheet" href="{{CONSOLE_BASE}}/admin.css?v=10" />
   <script type="module" src="{{CONSOLE_BASE}}/admin.js?v=10"></script>
@@ -49,7 +50,7 @@
         <section class="panel team-panel">
           <div class="panel-heading">
             <div><h2>Teams and balances</h2><p class="muted">Sorted by balance. Edits apply immediately and reach the team within five seconds.</p></div>
-            <select id="industryFilter" aria-label="Filter teams by industry"><option value="">All industries</option></select>
+            <div class="filters-inline"><select id="industryFilter" aria-label="Filter teams by industry"><option value="">All industries</option></select><button id="refreshButton" class="button" type="button">Refresh</button></div>
           </div>
           <div class="table-wrap">
             <table>

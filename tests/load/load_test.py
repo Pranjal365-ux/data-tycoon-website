@@ -66,17 +66,6 @@ async def leaderboard(client, stop: asyncio.Event):
             pass
 
 
-async def teammate(base: str, index: int, run: str, stop: asyncio.Event):
-    """An extra device signed in to the same team, just watching (polling)."""
-    async with httpx.AsyncClient(base_url=base, timeout=30) as client:
-        await asyncio.sleep(3 + random.random() * 4)
-        response = await call(client, "POST /team/connect (teammate)", "POST", "/api/team/connect", json={"teamId": f"Load {run} {index:03d}", "pin": "4321"})
-        if not response or response.status_code != 200:
-            return
-        headers = {"Authorization": f"Team {response.json()['token']}"}
-        await asyncio.gather(poller(client, headers, stop), leaderboard(client, stop))
-
-
 async def play(base: str, index: int, run: str, think: float, results: list):
     async with httpx.AsyncClient(base_url=base, timeout=30) as client:
         await asyncio.sleep(random.random() * 3)  # teams arrive over a few seconds
@@ -140,7 +129,6 @@ async def main():
     parser.add_argument("--base", default="http://127.0.0.1:8000")
     parser.add_argument("--teams", type=int, default=50)
     parser.add_argument("--think", type=float, default=8.0, help="average seconds spent reading/deciding per step")
-    parser.add_argument("--devices", type=int, default=1, help="devices per team (extra ones only watch)")
     parser.add_argument("--console", required=True)
     parser.add_argument("--password", required=True)
     args = parser.parse_args()
@@ -154,15 +142,14 @@ async def main():
     results: list[bool] = []
     stop = asyncio.Event()
     console_task = asyncio.create_task(organizer(args.base, args.console, args.password, stop))
-    watchers = [asyncio.create_task(teammate(args.base, i, run, stop)) for i in range(args.teams) for _ in range(args.devices - 1)]
     started = time.perf_counter()
     await asyncio.gather(*[play(args.base, i, run, args.think, results) for i in range(args.teams)])
     elapsed = time.perf_counter() - started
     stop.set()
-    await asyncio.gather(console_task, *watchers)
+    await console_task
 
     total = sum(len(values) for values in latencies.values())
-    print(f"\n{args.teams} teams x {args.devices} devices, {elapsed:.0f} s, {total} requests ({total / elapsed:.1f} req/s average)")
+    print(f"\n{args.teams} teams (one device each), {elapsed:.0f} s, {total} requests ({total / elapsed:.1f} req/s average)")
     print(f"Teams that finished all rounds: {sum(results)}/{args.teams}\n")
     print(f"{'endpoint':32} {'count':>6} {'p50 ms':>8} {'p95 ms':>8} {'p99 ms':>8} {'max ms':>8} {'errors':>7}")
     for name in sorted(latencies):

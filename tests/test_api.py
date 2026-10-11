@@ -308,10 +308,55 @@ def test_console_is_hidden_without_the_secret_path(client):
     assert "admin" not in client.get("/").text.lower()
 
 
-def test_console_disabled_when_path_unset(client, monkeypatch):
+def test_console_path_defaults_to_a_secret_derived_path(client, monkeypatch):
     monkeypatch.setenv("ADMIN_CONSOLE_PATH", "")
+    derived = api.derived_console_path("test-secret-for-signing-0123456789")
+    assert derived.startswith("ops-") and len(derived) == 28
     assert client.get(f"/{CONSOLE}/").status_code == 404
-    assert client.post("/api/admin/login", json={"password": "test-password"}, headers={"X-Console-Key": ""}).status_code == 404
+    assert client.get(f"/{derived}/").status_code == 200
+    assert client.post("/api/admin/login", json={"password": "test-password"}, headers={"X-Console-Key": derived}).status_code == 200
+    # The helper script computes the same path.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("console_url", api.API_DIR.parent / "scripts" / "console_url.py")
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    assert script.derived_console_path("test-secret-for-signing-0123456789") == derived
+
+
+def test_console_disabled_when_path_is_invalid(client, monkeypatch):
+    monkeypatch.setenv("ADMIN_CONSOLE_PATH", "short")
+    assert client.get("/short/").status_code == 404
+    assert client.post("/api/admin/login", json={"password": "test-password"}, headers={"X-Console-Key": "short"}).status_code == 404
+
+
+def test_only_one_device_per_team(client):
+    laptop, _ = connect(client, "Solo Team", "1234")
+    assert client.get("/api/team/state", headers=laptop).status_code == 200
+    other, _ = connect(client, "solo team", "1234")
+    kicked = client.get("/api/team/state", headers=laptop)
+    assert kicked.status_code == 401 and "another device" in kicked.json()["error"]
+    assert client.get("/api/team/state", headers=other).status_code == 200
+    # A wrong PIN elsewhere does not sign the real device out.
+    assert client.post("/api/team/connect", json={"teamId": "Solo Team", "pin": "9999"}).status_code == 401
+    assert client.get("/api/team/state", headers=other).status_code == 200
+
+
+def test_balance_never_goes_negative(client, db):
+    headers, _ = connect(client)
+    client.post("/api/team/industry", json={"industry": "Food"}, headers=headers)
+    state = ready_round(client, headers)
+    trap = rules.RANKS["Food"][0][-2]  # 0.3 parameter: over 40% becomes -0.9
+    allocations = {name: 1_000 for name in state["parameters"]}
+    allocations[trap] = state["budget"] - 9_000
+    result = client.post("/api/team/submit", json={"round": 1, "allocations": allocations}, headers=headers).json()
+    assert result["history"][0]["payout"] < 0 and result["companyValue"] == 0
+
+
+def test_vercel_extra_path_parameter_is_ignored(client):
+    assert client.get("/api", params={"route": "health", "path": "health"}).json()["ok"] is True
+    headers = admin_headers(client)
+    data = client.get("/api", params={"route": "admin/dashboard", "path": "admin/dashboard", "kind": "all"}, headers=headers).json()
+    assert "teams" in data
 
 
 def test_console_ip_allowlist(client, monkeypatch):

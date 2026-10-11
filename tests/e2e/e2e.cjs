@@ -271,16 +271,20 @@ async function signIn(page, teamId, pin) {
     await page.screenshot({ path: `${SHOTS}/09-leaderboard.png`, fullPage: true });
   });
 
-  await check("a teammate on another device sees the same progress", async () => {
+  await check("signing in on a second device signs the first one out (one device per team)", async () => {
     const other = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
     const phone = await other.newPage();
     await signIn(phone, team.toUpperCase(), "1234");
     await phone.waitForSelector(".tasks");
-    assert((await phone.textContent(".round-head h1")).includes("Round 2"), "teammate sees wrong round");
+    assert((await phone.textContent(".round-head h1")).includes("Round 2"), "second device sees wrong round");
     await phone.screenshot({ path: `${SHOTS}/10-mobile-round.png`, fullPage: true });
     await phone.click('.step[data-view="results"]');
     await phone.screenshot({ path: `${SHOTS}/11-mobile-results.png`, fullPage: true });
+    await page.waitForSelector("#loginForm", { timeout: 12000 });
+    assert((await page.textContent(".form-error")).includes("another device"), "no explanation on the first device");
     await other.close();
+    await signIn(page, team, "1234");
+    await page.waitForSelector(".tasks");
   });
 
   await check("organizer PIN reset signs the player out automatically", async () => {
