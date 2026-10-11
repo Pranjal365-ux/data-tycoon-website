@@ -26,7 +26,7 @@ function watermarkImage(text) {
 }
 
 function drawPage(canvas, bitmap) {
-  const width = Math.min(canvas.parentElement.clientWidth, 1000);
+  const width = Math.min(canvas.parentElement.clientWidth - 20, 1000);
   const ratio = Math.min(window.devicePixelRatio || 1, 2);
   const height = Math.round(width * bitmap.height / bitmap.width);
   canvas.width = Math.round(width * ratio);
@@ -53,7 +53,8 @@ export async function showFlash({ round, pages, teamId, fetchPage }) {
   const token = ++renderToken;
   const container = pageContainer();
   const stamp = new Date().toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "numeric", month: "short" });
-  document.querySelector("#flashWatermark").style.backgroundImage = `url("${watermarkImage(`${teamId} · ${stamp}`)}")`;
+  // Each page carries the watermark, so it stays on every page while scrolling.
+  container.style.setProperty("--flash-watermark", `url("${watermarkImage(`${teamId} · ${stamp}`)}")`);
   container.replaceChildren();
   const slots = Array.from({ length: pages }, (_, index) => {
     const slot = document.createElement("div");

@@ -8,7 +8,7 @@ Map of every page, UI element, API route, storage key, timer and security contro
 
 | Layer | What runs it |
 |---|---|
-| Player site | Static files in `public/` (`index.html`, `src/app.js`, `src/flash.js`, `src/guard.js`, `src/app.css`, `src/fonts.css`, `fonts/`) |
+| Player site | Static files in `public/` (`index.html`, `src/app.js`, `src/flash.js`, `src/guard.js`, `src/styles.css`, `src/editorial.css`, `src/gameflow.css`, `src/newsroom.css`, `src/fonts.css`, `fonts/`) |
 | API, private content, organizer console | `api/index.py` (FastAPI). On Vercel: one Python function (see `vercel.json`). Elsewhere: gunicorn/uvicorn via `Dockerfile` or `python server.py` |
 | Game rules (answer key) | `api/_rules.py`, server side only |
 | Private files | `api/_private/` (flash page images, datasets, console HTML/JS/CSS). Never served statically |
@@ -22,11 +22,13 @@ Local development and production run the same code (`server.py` simply starts `a
 
 | Path | Role |
 |---|---|
-| `public/index.html` | Player shell: top bar, step navigation, page container, flash overlay, confirm dialog, toasts |
+| `public/index.html` | Newspaper shell: utility bar, masthead, newsroom wire, step tabs, page container, flash overlay, confirm dialog, toasts |
 | `public/src/app.js` | Player app: session, polling, rendering of all views, actions |
 | `public/src/flash.js` | Flash viewer: fetches page images with the team token, draws them on canvas, adds the team watermark |
 | `public/src/guard.js` | Flash integrity guard (screenshots, tab/app switching, printing, devtools, copy) |
-| `public/src/app.css`, `public/src/fonts.css`, `public/fonts/*.woff2` | Styles and self-hosted fonts |
+| `public/src/styles.css`, `editorial.css`, `gameflow.css` | The original newspaper design, unchanged apart from removing the external font imports |
+| `public/src/newsroom.css` | New pieces (step tabs, next-step bulletin, integrity screens, dialog, toasts, phone layout) in the same style |
+| `public/src/fonts.css`, `public/fonts/*.woff2` | Self-hosted Libre Baskerville, Playfair Display and DM Mono |
 | `api/index.py` | API routes, organizer console route, site fallback, security headers |
 | `api/_rules.py` | Industries, parameters, rankings, multipliers, bands, validation, scoring, dataset file names |
 | `api/_worker.py` | Gunicorn worker with a 75 s keep-alive (Docker/Azure) |
@@ -46,47 +48,46 @@ Local development and production run the same code (`server.py` simply starts `a
 
 ## 3. Player site
 
-### 3.1 Shell (`public/index.html`)
+### 3.1 Shell (`public/index.html`): the original newspaper layout
 
 | Element | ID | Behavior |
 |---|---|---|
-| Brand | `.brand` | Link to `/` |
-| Connection status | `#connection` | "Live" or "Reconnecting…" (amber, pulsing) |
-| Team chip | `#teamChip` | `Team name · Industry` |
-| Sign out | `#signOut` | Confirms, then clears the session |
-| Step navigation | `#steps` | Four large steps (see 3.2) |
-| Page | `#page` | Next-step banner plus the current view |
-| Flash overlay | `#flash` | Title, hint, timer `#flashTimer`, close button `#flashClose`, pages `#flashPages`, watermark `#flashWatermark`, shield `#flashShield`, "You left the flash" card `#flashLeaveCard` |
-| Confirm dialog | `#confirmDialog` | Used for industry lock, submit, sign out |
+| Utility bar | `.utility-bar` | Edition label; `#utilityStatus` shows LIVE (green) or RECONNECTING (amber) plus team and industry desk; **SIGN OUT** (`#signOut`, confirms first) |
+| Masthead | `.masthead` | DT seal, DATA TYCOON title (click returns to your current page), Special Edition stamp, mottos |
+| Newsroom wire | `#wire` | Live status: round, next step, flash timer on/off, round wait on/off |
+| Step tabs | `#steps` | Four tabs (see 3.2) |
+| Page | `#page` | Next-step bulletin plus the current view |
+| Flash overlay | `#flash` | Red flash bar (FLASH N OF 04, hint, live `#flashTimer` countdown or TIMER OFF), pages with team watermark, `#flashTimerNotice` (SCREEN LOCKED / TIMER OFF), green DONE READING button (hidden while the five-minute lock runs, exactly as before), shield `#flashShield`, "You left the flash" card `#flashLeaveCard` |
+| Confirm dialog | `#confirmDialog` | Industry lock, submit, sign out |
 | Toasts | `#toasts` | Success, info and error messages |
 
 There is no link to the organizer console anywhere on the player site.
 
-### 3.2 Step navigation and next-step banner
+### 3.2 Step tabs and next-step bulletin
 
-Steps: **1 Industry**, **2 Round N of 4**, **3 Results**, **4 Leaderboard**. Each shows a status line (for example "Food (locked)", "Download the dataset", "Round 1: ₹9,96,000"). The current step is highlighted, completed steps show a check, and locked steps show a lock with the reason ("Choose an industry first", "Submit a round to see results"). On phones the strip scrolls sideways and keeps the current step in view.
+Tabs: **01 · Industry**, **02 · Round N of 4**, **03 · Results**, **Leaderboard**. Each shows a status line (for example "Food (locked)", "Download the dataset", "Round 1: ₹9,96,000"). The current tab is outlined in red, completed ones show a green check, and locked ones show a lock with the reason. On phones the strip scrolls sideways and keeps the current tab in view.
 
-The dark **Next step** banner always says what to do now, with a button that does it:
+The **NEXT STEP** bulletin always says what to do now, with a button that does it:
 
-| Stage | Banner | Button |
+| Stage | Bulletin | Button |
 |---|---|---|
-| No industry | Choose your industry | Choose industry |
-| Flash not read | Open the Round N flash | Open flash |
-| Dataset not downloaded | Download the Round N dataset | Download dataset |
-| Ready to invest | Invest ₹X and submit | Go to the table |
-| Submitted, waiting | Round N+1 opens in mm:ss (live countdown) | View results |
-| Next round open | Round N+1 is open | Start Round N+1 |
-| Finished / eliminated | Final message | View leaderboard |
+| No industry | Choose your industry desk | (cards below) |
+| Flash not read | Read the Round N flash | OPEN FLASH |
+| Dataset not downloaded | Download the Round N dataset | DOWNLOAD DATASET |
+| Ready to invest | Invest ₹X and submit | GO TO THE DESK |
+| Submitted, waiting | Round N+1 opens in mm:ss (live countdown) | VIEW RESULTS |
+| Next round open | Round N+1 is open | PROCEED TO ROUND N+1 |
+| Finished / eliminated | Final message | VIEW LEADERBOARD |
 
 The page moves itself: after submitting it shows Results; when the next round opens the button appears without a reload; after advancing it shows the new round.
 
-### 3.3 Views
+### 3.3 Views (original markup)
 
-* **Sign in**: game summary and four rule cards; form with team name, team PIN, help text, inline error.
-* **Industry**: five cards with description, seat bar (`N of 20 seats left`), and a choose button that opens a confirmation. Locked teams see their industry and a link to the round.
-* **Round**: header (industry, round, budget to invest, leaderboard rank), budget explanation (carried balance plus bonus), three task cards (Read the flash, Download the dataset, Invest and submit) each marked done / current / locked, then the investment table: ten parameters (common or industry specific), rupee inputs, live share %, invested and left-to-invest totals, validation message, Clear, and Submit (with confirmation).
-* **Results**: next-round panel (countdown, start button or game over), payout, profit, budget, bonus and elimination notes, balance chart, where-the-money-went table, earlier rounds as expandable cards.
-* **Leaderboard**: rank (medals for top three), team, industry, progress, balance; own team highlighted; auto refresh every 10 s while open; manual Refresh.
+* **Login**: "WELCOME, ANALYSTS.", event rules, monitoring notice, NEWSROOM LOG IN form (Team ID / Name, Access PIN, notes, error, ENTER THE NEWSROOM). The last team name is remembered.
+* **Industry**: STEP 1 heading, selection strip (SELECTED: … with CONFIRM & PROCEED), five INDUSTRY DESK cards with seats remaining and CHOOSE THIS INDUSTRY; confirming asks for confirmation. Locked teams see their industry and a link to their round.
+* **Round dashboard**: LIVE MARKET DASHBOARD label, market tape (round budget, leaderboard rank, round progress, industry), HOW TO PLAY THIS ROUND (bonus or carried balance line, steps that tick off as you go, current flash timer and round wait settings), red MANDATORY STORYLINE FLASH box, DATASET box, NET CAPITAL TREND chart, and the INVESTMENT ALLOCATION DESK: ten parameters with minimum rule and live share, amount inputs that step by ₹1,000, a "+ REST" button per row that adds whatever is still unallocated, CLEAR ALL, the required / invested / remaining box, the validation line and LOCK & SUBMIT ROUND N (with confirmation). Each of the three sections carries a STEP tag (COMPLETE / DO THIS NOW / LOCKED).
+* **Results**: ROUND 0N CLOSE heading, chart, FINANCIAL CLOSE card with FINAL ROUND PAYOUT, net profit, bonus, disqualification and rank, the parameter table, then the round-wait countdown with PROCEED TO ROUND N+1 (or the final leaderboard button). Earlier rounds are listed below.
+* **Leaderboard**: OFFICIAL LEADERBOARD with 🥇 1ST / 🥈 2ND / 🥉 3RD badges, (YOU) highlight, round reached and net capital; back and REFRESH RANKINGS buttons; refreshes every 10 s while open.
 
 ### 3.4 Data flow and timers
 
@@ -175,7 +176,7 @@ Without the right console key every organizer route answers 404.
 
 Older team records written by the previous version are read correctly (history, flags and active flash are converted on the fly), and their PINs still work.
 
-## 7. Organizer console
+## 7. Organizer console (original design restored)
 
 * Stats: teams, online now (seen in the last 30 s), integrity alerts in the last 10 minutes, combined balance.
 * Controls: flash timer (on = five-minute lock, turning it on restarts the lock for open flashes), 30-minute round wait.

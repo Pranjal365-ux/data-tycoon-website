@@ -87,7 +87,7 @@ async function signIn(page, teamId, pin) {
 
   await check("wrong PIN shows a clear error", async () => {
     await signIn(page, team, "1234");
-    await page.waitForSelector(".step");
+    await page.waitForSelector(".desk-tab");
     await page.click('[data-action="sign-out"]');
     await page.click("#confirmOk");
     await page.waitForSelector("#loginForm");
@@ -101,19 +101,24 @@ async function signIn(page, teamId, pin) {
   await check("sign in lands on industry choice with clear steps", async () => {
     await page.fill("#pin", "1234");
     await page.click("#loginForm button[type=submit]");
-    await page.waitForSelector(".industry-grid");
-    const steps = await page.$$eval(".step", nodes => nodes.map(node => node.textContent.replace(/\s+/g, " ").trim()));
+    await page.waitForSelector(".article-grid");
+    const steps = await page.$$eval(".desk-tab", nodes => nodes.map(node => node.textContent.replace(/\s+/g, " ").trim()));
     assert(steps.length === 4, "expected 4 steps");
-    assert(await page.isVisible(".next-step"), "next step banner missing");
+    assert(await page.isVisible(".next-bulletin"), "next step bulletin missing");
+    assert(await page.isVisible(".masthead") && await page.isVisible(".breaking-strip"), "newspaper masthead missing");
     await page.screenshot({ path: `${SHOTS}/02-industry.png`, fullPage: true });
   });
 
   await check("choosing an industry asks for confirmation and locks it", async () => {
-    await page.click('[data-action="choose-industry"][data-industry="Food"]');
+    assert(await page.isDisabled('[data-action="confirm-industry"]'), "confirm should wait for a selection");
+    await page.click('[data-action="select-industry"][data-industry="Food"]');
+    assert((await page.textContent(".selection-strip strong")).includes("FOOD"), "selection strip not updated");
+    await page.click('[data-action="confirm-industry"]');
     await page.waitForSelector("#confirmDialog[open]");
     await page.click("#confirmOk");
-    await page.waitForSelector(".tasks");
-    assert((await page.textContent("#teamChip")).includes("Food"), "team chip missing industry");
+    await page.waitForSelector(".market-tape");
+    assert((await page.textContent("#utilityStatus")).includes("FOOD DESK"), "utility bar missing industry");
+    assert((await page.textContent("#wire")).includes("FLASH TIMER OFF"), "wire should show the timer setting");
     await page.screenshot({ path: `${SHOTS}/03-round.png`, fullPage: true });
   });
 
@@ -123,11 +128,14 @@ async function signIn(page, teamId, pin) {
   });
 
   await check("flash opens with all pages rendered and a watermark", async () => {
-    await page.click('.task [data-action="open-flash"]');
+    await page.click('.flash-callout [data-action="open-flash"]');
     await page.waitForSelector("#flash:not([hidden])");
     await page.waitForFunction(() => document.querySelectorAll("#flashPages canvas").length === 6, null, { timeout: 15000 });
-    const watermark = await page.$eval("#flashWatermark", el => getComputedStyle(el).backgroundImage);
-    assert(watermark.startsWith("url("), "watermark missing");
+    const watermark = await page.$eval("#flashPages .flash-page", el => getComputedStyle(el, "::after").backgroundImage);
+    assert(watermark.startsWith("url("), "watermark missing on pages");
+    assert((await page.textContent("#flashTimer")).trim() === "TIMER OFF", "timer off label missing");
+    assert((await page.textContent("#flashTimerNotice")).includes("TIMER OFF"), "timer off notice missing");
+    assert(await page.isVisible("#flashClose"), "close button should show when the timer is off");
     assert(await page.evaluate(() => document.querySelector("#appRoot").inert), "app behind flash should be inert");
     await page.screenshot({ path: `${SHOTS}/04-flash.png` });
   });
@@ -203,7 +211,7 @@ async function signIn(page, teamId, pin) {
   });
 
   await check("dataset downloads with the right file", async () => {
-    const [download] = await Promise.all([page.waitForEvent("download"), page.click('.task [data-action="download-dataset"]')]);
+    const [download] = await Promise.all([page.waitForEvent("download"), page.click('.dataset-callout [data-action="download-dataset"]')]);
     assert(download.suggestedFilename() === "food-round-1.xlsx", download.suggestedFilename());
     await page.waitForSelector("input[data-param]:not([disabled])");
   });
@@ -211,51 +219,61 @@ async function signIn(page, teamId, pin) {
   await check("allocation table validates live and submits", async () => {
     const inputs = await page.$$("input[data-param]");
     assert(inputs.length === 10, "expected 10 parameters");
+    assert((await inputs[0].getAttribute("step")) === "1000", "amount arrows should step by 1,000");
+    await inputs[0].focus();
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("ArrowUp");
+    assert((await inputs[0].inputValue()) === "3000", `arrow keys gave ${await inputs[0].inputValue()}`);
     await inputs[0].fill("500");
-    assert((await page.textContent("#allocMessage")).includes("at least"), "minimum not flagged");
-    for (const input of inputs) await input.fill("100000");
-    assert((await page.textContent("#allocMessage")).includes("Ready"), "should be ready");
+    assert((await page.textContent("#allocMessage")).includes("AT LEAST"), "minimum not flagged");
+    for (const input of inputs.slice(0, 9)) await input.fill("100000");
+    await inputs[9].fill("1000");
+    await page.click('[data-action="fill-rest"][data-index="9"]');
+    assert((await inputs[9].inputValue()) === "100000", `+ REST gave ${await inputs[9].inputValue()}`);
+    assert((await page.textContent("#allocMessage")).includes("ALLOCATIONS VALID"), "should be ready");
     await page.screenshot({ path: `${SHOTS}/07-allocation.png`, fullPage: true });
     await page.click("#submitRound");
     await page.click("#confirmOk");
-    await page.waitForSelector(".result-card");
+    await page.waitForSelector(".results-card");
     assert(await page.isVisible('[data-countdown="wait"]'), "wait countdown missing");
     await page.screenshot({ path: `${SHOTS}/08-results.png`, fullPage: true });
   });
 
   await check("organizer removing the wait opens the next round live (no reload)", async () => {
     await admin("/admin/settings", { method: "PATCH", body: { roundWait: false } });
-    await page.waitForSelector('.next-round [data-action="advance"]', { timeout: 12000 });
+    await page.waitForSelector('.next-round-desk [data-action="advance"]', { timeout: 12000 });
   });
 
   await check("round 2 starts with the carried balance plus bonus", async () => {
-    const payout = await page.$eval(".result-numbers b", el => el.textContent);
-    await page.click('.next-round [data-action="advance"]');
-    await page.waitForSelector(".tasks");
-    const budget = await page.$eval(".stats dd", el => el.textContent);
+    const payout = await page.$eval(".result-highlight strong", el => el.textContent);
+    await page.click('.next-round-desk [data-action="advance"]');
+    await page.waitForSelector(".market-tape");
+    const budget = await page.$eval(".tape-budget", el => el.textContent);
     const expected = Number(payout.replace(/[^\d]/g, "")) + 250000;
     assert(Number(budget.replace(/[^\d]/g, "")) === expected, `${budget} != ${expected}`);
   });
 
   await check("organizer balance change reaches the player live", async () => {
     await admin("/admin/team-balance", { method: "PATCH", body: { teamKey: team.toLowerCase(), companyValue: 1500000 } });
-    await page.waitForFunction(() => document.querySelector(".stats dd")?.textContent.includes("17,50,000"), null, { timeout: 12000 });
+    await page.waitForFunction(() => document.querySelector(".tape-budget")?.textContent.includes("17,50,000"), null, { timeout: 12000 });
     await page.waitForSelector(".toast");
   });
 
-  await check("flash timer on locks the close button", async () => {
+  await check("flash timer on shows the countdown and locks the flash", async () => {
     await admin("/admin/settings", { method: "PATCH", body: { flashTimer: true } });
     await page.waitForTimeout(5500);
-    await page.click('.task [data-action="open-flash"]');
+    await page.click('.flash-callout [data-action="open-flash"]');
     await page.waitForSelector("#flash:not([hidden])");
-    assert(await page.isDisabled("#flashClose"), "close should be locked");
-    assert((await page.textContent("#flashTimer")).startsWith("Locked"), "timer text missing");
+    assert(await page.isHidden("#flashClose"), "close should be hidden while locked");
+    assert(/^0[45]:\d\d$/.test((await page.textContent("#flashTimer")).trim()), `countdown missing: ${await page.textContent("#flashTimer")}`);
+    assert((await page.textContent("#flashTimerNotice")).includes("SCREEN LOCKED"), "lock notice missing");
   });
 
   await check("reloading during a locked flash reopens it", async () => {
     await page.reload();
     await page.waitForSelector("#flash:not([hidden])", { timeout: 10000 });
-    assert(await page.isDisabled("#flashClose"), "lock lost after reload");
+    assert(await page.isHidden("#flashClose"), "lock lost after reload");
   });
 
   await check("turning the timer off lets the player close it live", async () => {
@@ -266,8 +284,9 @@ async function signIn(page, teamId, pin) {
   });
 
   await check("leaderboard highlights the team", async () => {
-    await page.click('.step[data-view="leaderboard"]');
-    await page.waitForSelector("tr.me");
+    await page.click('.desk-tab[data-view="leaderboard"]');
+    await page.waitForSelector(".leaderboard-box tr.me");
+    assert((await page.textContent(".leaderboard-box tr.me")).includes("(YOU)"), "you marker missing");
     await page.screenshot({ path: `${SHOTS}/09-leaderboard.png`, fullPage: true });
   });
 
@@ -275,20 +294,20 @@ async function signIn(page, teamId, pin) {
     const other = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
     const phone = await other.newPage();
     await signIn(phone, team.toUpperCase(), "1234");
-    await phone.waitForSelector(".tasks");
-    assert((await phone.textContent(".round-head h1")).includes("Round 2"), "second device sees wrong round");
+    await phone.waitForSelector(".market-tape");
+    assert((await phone.textContent(".section-heading h2")).includes("ROUND 2"), "second device sees wrong round");
     await phone.screenshot({ path: `${SHOTS}/10-mobile-round.png`, fullPage: true });
-    await phone.click('.step[data-view="results"]');
+    await phone.click('.desk-tab[data-view="results"]');
     await phone.screenshot({ path: `${SHOTS}/11-mobile-results.png`, fullPage: true });
     await page.waitForSelector("#loginForm", { timeout: 12000 });
     assert((await page.textContent(".form-error")).includes("another device"), "no explanation on the first device");
     await other.close();
     await signIn(page, team, "1234");
-    await page.waitForSelector(".tasks");
+    await page.waitForSelector(".market-tape");
   });
 
   await check("organizer PIN reset signs the player out automatically", async () => {
-    await page.click('.step[data-view="round"]');
+    await page.click('.desk-tab[data-view="round"]');
     await admin("/admin/team-reset-pin", { method: "POST", body: { teamKey: team.toLowerCase() } });
     await page.waitForSelector("#loginForm", { timeout: 12000 });
     assert((await page.textContent(".form-error")).length > 10, "no sign-out message");

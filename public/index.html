@@ -3,66 +3,66 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#f4efe4" />
-  <meta name="description" content="Data Tycoon: read the market news, analyse the data, invest your budget. TechTatva '26." />
-  <title>Data Tycoon · TechTatva '26</title>
+  <meta name="theme-color" content="#f5edda" />
+  <meta name="description" content="The Daily Data: read the market news, analyse the data, invest your budget. Data Tycoon, TechTatva '26." />
+  <title>The Daily Data | Data Tycoon</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-  <link rel="preload" href="./fonts/inter.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="./src/fonts.css?v=40" />
-  <link rel="stylesheet" href="./src/app.css?v=40" />
-  <script type="module" src="./src/app.js?v=40"></script>
+  <link rel="preload" href="./fonts/libre-baskerville-normal-400.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="./src/fonts.css?v=50" />
+  <link rel="stylesheet" href="./src/styles.css?v=50" />
+  <link rel="stylesheet" href="./src/editorial.css?v=50" />
+  <link rel="stylesheet" href="./src/gameflow.css?v=50" />
+  <link rel="stylesheet" href="./src/newsroom.css?v=50" />
+  <script type="module" src="./src/app.js?v=50"></script>
 </head>
 <body>
-  <div id="appRoot" class="app">
-    <header class="topbar">
-      <a class="brand" href="/" aria-label="Data Tycoon home">
-        <span class="brand-mark" aria-hidden="true">DT</span>
-        <span class="brand-text"><strong>Data Tycoon</strong><small>TechTatva '26</small></span>
-      </a>
-      <div class="topbar-right">
-        <span id="connection" class="connection" hidden><span class="dot" aria-hidden="true"></span><span id="connectionText">Live</span></span>
-        <span id="teamChip" class="team-chip" hidden></span>
-        <button id="signOut" class="button button-quiet" type="button" data-action="sign-out" hidden>Sign out</button>
-      </div>
+  <div class="paper-frame" id="appRoot">
+    <div class="utility-bar">
+      <span>THE BUSINESS INTELLIGENCE EDITION</span>
+      <span id="utilityStatus" class="utility-status">LIVE SIMULATION DESK · VOL. 01</span>
+      <button id="signOut" class="utility-login" type="button" data-action="sign-out" hidden>SIGN OUT</button>
+    </div>
+    <header class="masthead">
+      <div class="mast-meta"><span>EST. SOMEWHERE BETWEEN YESTERDAY &amp; TOMORROW</span><span>TECHTATVA '26 · MIT MANIPAL</span></div>
+      <div class="brand-lockup"><span class="brand-seal" aria-hidden="true">DT</span><a class="masthead-link" href="/" data-action="home"><h1>DATA TYCOON</h1><p class="subtitle">THE DAILY DATA · BUSINESS &amp; CONSEQUENCES</p></a><span class="edition-stamp">SPECIAL<br><b>EDITION</b></span></div>
+      <div class="mast-motto"><span>EVERY DECISION HAS A MARKET IMPACT.</span><span>READ THE STORY. FIND THE SIGNAL.</span></div>
     </header>
-    <nav id="steps" class="steps" aria-label="Game sections" hidden></nav>
+    <div class="breaking-strip"><b>NEWSROOM WIRE</b><span id="wire">MARKETS MOVE · NEWS SPREADS · DECISIONS COMPOUND</span></div>
+    <nav id="steps" class="desk-tabs" aria-label="Game sections" hidden></nav>
     <main id="page" class="page" tabindex="-1">
-      <noscript><p class="notice">Data Tycoon needs JavaScript enabled.</p></noscript>
-      <p class="loading">Loading…</p>
+      <noscript><p class="lead">Data Tycoon needs JavaScript enabled.</p></noscript>
+      <p class="press-loading">LOADING THE EDITION…</p>
     </main>
-    <footer class="footer">Data Tycoon · TechTatva '26 · MIT Manipal</footer>
+    <footer>THE DAILY DATA · DATA TYCOON · TECHTATVA '26</footer>
   </div>
 
-  <div id="flash" class="flash" hidden role="dialog" aria-modal="true" aria-labelledby="flashTitle">
-    <div class="flash-bar">
-      <div class="flash-title"><strong id="flashTitle">Flash 1 of 4</strong><span id="flashHint">Read carefully. The dataset unlocks when you finish.</span></div>
-      <div class="flash-controls">
-        <span id="flashTimer" class="flash-timer" aria-live="off"></span>
-        <button id="flashClose" class="button button-primary" type="button" data-action="close-flash">Done reading</button>
-      </div>
-    </div>
-    <div class="flash-scroll">
-      <div id="flashPages" class="flash-pages"></div>
-      <div id="flashWatermark" class="flash-watermark" aria-hidden="true"></div>
-    </div>
-    <div id="flashShield" class="flash-shield" hidden><p id="flashShieldText">Flash hidden.</p></div>
+  <div id="flash" class="news-overlay" hidden role="dialog" aria-modal="true" aria-labelledby="flashTitle">
+    <section class="news-paper flash-document-paper">
+      <div class="flash-bar"><span id="flashTitle">FLASH 1 OF 04</span><span id="flashHint">READ THE ROUND FLASH</span><span id="flashTimer" aria-live="off">05:00</span></div>
+      <div class="flash-document-frame" role="document" aria-label="Round flash document"><div id="flashPages" class="flash-pages"></div></div>
+      <div id="flashTimerNotice" class="screen-locked">SCREEN LOCKED · THIS FLASH ENDS AFTER FIVE MINUTES</div>
+      <button id="flashClose" class="flash-finish-button" type="button" data-action="close-flash">DONE READING · RETURN TO ROUND</button>
+    </section>
+    <div id="flashShield" class="flash-shield" hidden><p id="flashShieldText">FLASH HIDDEN</p></div>
     <div id="flashLeaveCard" class="flash-leave" hidden role="alertdialog" aria-labelledby="flashLeaveTitle">
       <div class="flash-leave-card">
+        <span class="article-label">INTEGRITY NOTICE</span>
         <h2 id="flashLeaveTitle">You left the flash</h2>
         <p>You were away for <b data-away-seconds>a few seconds</b>. Leaving the flash (switching tabs or apps, or opening a screenshot tool) is reported to the organizers.</p>
-        <p class="muted">The flash timer kept running while you were away.</p>
-        <button class="button button-primary" type="button">Continue reading</button>
+        <p class="leave-note">The flash timer kept running while you were away.</p>
+        <button type="button">CONTINUE READING</button>
       </div>
     </div>
   </div>
 
-  <dialog id="confirmDialog" class="confirm-dialog">
+  <dialog id="confirmDialog" class="press-dialog">
     <form method="dialog">
+      <span class="article-label">PLEASE CONFIRM</span>
       <h2 id="confirmTitle">Are you sure?</h2>
       <p id="confirmBody"></p>
       <div class="dialog-actions">
-        <button class="button button-quiet" value="cancel" type="submit">Cancel</button>
-        <button id="confirmOk" class="button button-primary" value="ok" type="submit">Confirm</button>
+        <button class="ghost" value="cancel" type="submit">CANCEL</button>
+        <button id="confirmOk" value="ok" type="submit">CONFIRM</button>
       </div>
     </form>
   </dialog>

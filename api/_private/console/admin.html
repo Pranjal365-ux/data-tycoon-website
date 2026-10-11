@@ -3,82 +3,86 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f5edda" />
   <meta name="robots" content="noindex, nofollow" />
   <meta name="referrer" content="no-referrer" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-  <title>Organizer console · Data Tycoon</title>
-  <link rel="stylesheet" href="{{CONSOLE_BASE}}/admin.css?v=10" />
-  <script type="module" src="{{CONSOLE_BASE}}/admin.js?v=10"></script>
+  <title>Organizer Portal | Data Tycoon</title>
+  <link rel="stylesheet" href="/src/fonts.css?v=50" />
+  <link rel="stylesheet" href="{{CONSOLE_BASE}}/admin.css?v=50" />
+  <script type="module" src="{{CONSOLE_BASE}}/admin.js?v=50"></script>
 </head>
 <body>
   <header class="admin-header">
-    <div class="brand"><span class="brand-mark">DT</span><div><strong>Data Tycoon</strong><small>Organizer console</small></div></div>
-    <div class="header-right"><span id="connectionState" class="connection-state">Connecting…</span><button id="logoutButton" class="button button-quiet" type="button" hidden>Sign out</button></div>
+    <a class="brand" href="/">DATA TYCOON <span>ORGANIZER DESK</span></a>
+    <div class="header-actions"><div id="connectionState" class="connection-state">CONNECTING</div><button id="logoutButton" class="button-secondary header-signout" type="button" hidden>SIGN OUT</button></div>
   </header>
   <main class="admin-main">
-    <section id="loginPanel" class="panel login-panel">
+    <section id="loginPanel" class="login-panel">
+      <p class="eyebrow">PRIVATE EVENT CONTROLS</p>
       <h1>Organizer sign in</h1>
-      <p class="muted">Private event controls. Do not share this page's address.</p>
+      <p>Sign in to view live team balances, integrity alerts, and leaderboard standings. Do not share this page's address.</p>
       <form id="adminLoginForm">
         <label for="adminPassword">Organizer password</label>
         <input id="adminPassword" type="password" autocomplete="current-password" required />
-        <button class="button button-primary" type="submit">Sign in</button>
+        <button type="submit">SIGN IN</button>
       </form>
       <p id="loginError" class="error" role="alert"></p>
     </section>
 
     <section id="dashboard" hidden>
-      <div class="stats-grid" aria-label="Event summary">
-        <article class="stat-card"><span>Teams</span><strong id="teamCount">0</strong></article>
-        <article class="stat-card"><span>Online now</span><strong id="onlineCount">0</strong></article>
-        <article class="stat-card alert"><span>Integrity alerts · last 10 min</span><strong id="signalCount">0</strong></article>
-        <article class="stat-card"><span>Combined balance</span><strong id="combinedBalance">₹0</strong></article>
+      <div class="dashboard-heading">
+        <div><p class="eyebrow">LIVE EVENT CONTROL</p><h1>Organizer dashboard</h1><p class="muted">Teams, balances and alerts refresh automatically every three seconds.</p></div>
       </div>
 
-      <div class="controls-grid">
-        <section class="panel control">
-          <div><h2>Flash timer</h2><p id="flashTimerDescription" class="muted">Loading…</p></div>
-          <div class="control-action"><span id="flashTimerStatus" class="pill">…</span><button id="flashTimerToggle" class="button" type="button" disabled>…</button></div>
-        </section>
-        <section class="panel control">
-          <div><h2>30-minute round wait</h2><p id="roundWaitDescription" class="muted">Loading…</p></div>
-          <div class="control-action"><span id="roundWaitStatus" class="pill">…</span><button id="roundWaitToggle" class="button" type="button" disabled>…</button></div>
-        </section>
-      </div>
+      <div class="integrity-note"><strong>Integrity alerts:</strong> While a flash is open, the organizers are alerted when the browser sees a screenshot shortcut (Print Screen, Win/Cmd + Shift), a print or developer-tools attempt, or the team leaving the tab or window. Phone cameras and some operating system screenshot tools cannot be detected by any website.</div>
+
+      <section class="panel flash-timer-control" aria-labelledby="flashTimerHeading">
+        <div><p class="eyebrow">ROUND ACCESS CONTROL</p><h2 id="flashTimerHeading">Flash timer</h2><p id="flashTimerDescription" class="muted">Loading current timer setting…</p></div>
+        <div class="flash-timer-action"><strong id="flashTimerStatus">LOADING</strong><button id="flashTimerToggle" class="button-secondary" type="button" disabled>LOADING</button></div>
+      </section>
+
+      <section class="panel flash-timer-control round-wait-control" aria-labelledby="roundWaitHeading">
+        <div><p class="eyebrow">NEXT ROUND ACCESS</p><h2 id="roundWaitHeading">30-minute round wait</h2><p id="roundWaitDescription" class="muted">Loading round wait setting…</p></div>
+        <div class="flash-timer-action"><strong id="roundWaitStatus">LOADING</strong><button id="roundWaitToggle" class="button-secondary" type="button" disabled>LOADING</button></div>
+      </section>
+
+      <section class="stats-grid" aria-label="Event summary">
+        <article class="stat-card"><span>TEAMS</span><strong id="teamCount">0</strong></article>
+        <article class="stat-card"><span>ONLINE NOW</span><strong id="onlineCount">0</strong></article>
+        <article class="stat-card"><span>INTEGRITY ALERTS · 10 MIN</span><strong id="signalCount">0</strong></article>
+        <article class="stat-card"><span>COMBINED TEAM BALANCE</span><strong id="combinedBalance">₹0</strong></article>
+      </section>
 
       <div class="content-grid">
         <section class="panel team-panel">
-          <div class="panel-heading">
-            <div><h2>Teams and balances</h2><p class="muted">Sorted by balance. Edits apply immediately and reach the team within five seconds.</p></div>
-            <div class="filters-inline"><select id="industryFilter" aria-label="Filter teams by industry"><option value="">All industries</option></select><button id="refreshButton" class="button" type="button">Refresh</button></div>
-          </div>
+          <div class="panel-heading"><div><p class="eyebrow">LIVE STANDINGS</p><h2>Leaderboard and balances</h2></div><button id="refreshButton" class="button-secondary" type="button">REFRESH</button></div>
+          <div class="team-filter-bar"><label for="industryFilter">FILTER TEAMS AND BALANCES BY INDUSTRY</label><select id="industryFilter" aria-label="Filter teams by industry"><option value="">All industries</option></select></div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>#</th><th>Team</th><th>Industry</th><th>Progress</th><th>Status</th><th class="num">Balance</th><th>Actions</th></tr></thead>
-              <tbody id="teamsBody"><tr><td colspan="7" class="empty">Waiting for teams…</td></tr></tbody>
+              <thead><tr><th>#</th><th>TEAM</th><th>INDUSTRY</th><th>ROUND</th><th>BALANCE</th><th>STATUS</th><th>SET BALANCE</th></tr></thead>
+              <tbody id="teamsBody"><tr><td colspan="7" class="empty">Waiting for teams to connect…</td></tr></tbody>
             </table>
           </div>
         </section>
 
         <section class="panel activity-panel">
-          <div class="panel-heading column">
-            <div><h2>Integrity alerts</h2><p class="muted">Screenshots, tab switches and leaving the window while a flash is open.</p></div>
-            <div class="filters">
-              <select id="activityKind" aria-label="Alert type">
-                <option value="alerts">All alerts</option>
-                <option value="screenshots">Screenshots only</option>
-                <option value="focus">Tab switches and returns</option>
-                <option value="all">All activity</option>
-              </select>
-              <select id="activityIndustryFilter" aria-label="Filter alerts by industry"><option value="">All industries</option></select>
-              <select id="activityFilter" aria-label="Filter alerts by team"><option value="">All teams</option></select>
-            </div>
-          </div>
+          <div class="panel-heading"><div><p class="eyebrow">EVENT INTEGRITY</p><h2>Integrity alerts</h2></div>
+          <div class="admin-filters">
+            <select id="activityKind" aria-label="Alert type">
+              <option value="alerts">All alerts</option>
+              <option value="screenshots">Screenshots only</option>
+              <option value="focus">Tab switches and returns</option>
+              <option value="all">All activity</option>
+            </select>
+            <select id="activityIndustryFilter" aria-label="Filter alerts by industry"><option value="">All industries</option></select>
+            <select id="activityFilter" aria-label="Filter alerts by team"><option value="">All teams</option></select>
+          </div></div>
           <div id="activityFeed" class="activity-feed"><p class="empty">Waiting for activity…</p></div>
         </section>
       </div>
       <p id="dashboardMessage" class="message" role="status"></p>
-      <p class="footer-note">Alerts are signals for review, not proof. Browsers cannot see every operating-system screenshot (for example a phone camera), so check alerts alongside what you observe in the room.</p>
+      <p class="footer-note">Balance edits apply to the team's current balance and reach their screen within five seconds. Each change is recorded in the activity log. "Reset PIN" signs the team out everywhere; the next PIN they enter becomes their new PIN. Alerts are signals for review, not proof.</p>
     </section>
   </main>
 </body>

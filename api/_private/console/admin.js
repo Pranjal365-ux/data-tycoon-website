@@ -107,20 +107,22 @@ $("#industryFilter").addEventListener("change", () => { lastTeams = ""; renderTe
 function renderSettings(next) {
   settings = next;
   const flash = next.flashTimer.enabled;
-  $("#flashTimerStatus").textContent = flash ? "On · 5-minute lock" : "Off · players close it";
+  $("#flashTimerStatus").textContent = flash ? "ON · FIVE-MINUTE LOCK" : "OFF · MANUAL CLOSE";
   $("#flashTimerStatus").classList.toggle("off", !flash);
   $("#flashTimerDescription").textContent = flash
-    ? "Players must keep the flash open for five minutes. Turning it off lets them close it straight away."
-    : "Players close the flash when they are done. Turning it on starts a fresh five-minute lock for any open flash.";
-  $("#flashTimerToggle").textContent = flash ? "Turn timer off" : "Turn timer on";
+    ? "Players are timed while reading a flash. Turning this off lets them close it manually."
+    : "Players can read each flash and close it manually. Turn the five-minute lock back on whenever needed.";
+  $("#flashTimerToggle").textContent = flash ? "TURN TIMER OFF" : "TURN TIMER ON";
+  $("#flashTimerToggle").setAttribute("aria-pressed", String(flash));
   $("#flashTimerToggle").disabled = false;
   const wait = next.roundWait.enabled;
-  $("#roundWaitStatus").textContent = wait ? "On · 30 minutes" : "Off · next round opens at once";
+  $("#roundWaitStatus").textContent = wait ? "ON · 30-MINUTE WAIT" : "OFF · NEXT ROUND OPEN";
   $("#roundWaitStatus").classList.toggle("off", !wait);
   $("#roundWaitDescription").textContent = wait
-    ? "Teams wait 30 minutes after submitting before the next round opens."
-    : "Teams can start the next round as soon as they submit.";
-  $("#roundWaitToggle").textContent = wait ? "Remove the wait" : "Turn the wait on";
+    ? "Teams must wait 30 minutes after submitting each round before advancing."
+    : "Teams can advance as soon as they submit. Turning this back on enforces the 30-minute wait for teams that have not advanced.";
+  $("#roundWaitToggle").textContent = wait ? "REMOVE ROUND WAIT" : "TURN ROUND WAIT ON";
+  $("#roundWaitToggle").setAttribute("aria-pressed", String(wait));
   $("#roundWaitToggle").disabled = false;
 }
 
@@ -170,20 +172,17 @@ function renderTeams(next) {
   const filter = $("#industryFilter").value;
   const visible = filter ? next.filter(team => team.industry === filter) : next;
   if (!visible.length) {
-    $("#teamsBody").innerHTML = `<tr><td colspan="7" class="empty">No teams yet.</td></tr>`;
+    $("#teamsBody").innerHTML = `<tr><td colspan="7" class="empty">No teams have connected yet.</td></tr>`;
     return;
   }
   $("#teamsBody").innerHTML = visible.map((team, index) => `<tr>
     <td class="rank">${index + 1}</td>
-    <td class="team-name">${esc(team.teamId)}${team.hasPin ? "" : ' <span class="tag">PIN reset</span>'}</td>
-    <td>${esc(team.industry || "Not chosen")}</td>
-    <td>${team.isEliminated ? '<span class="tag bad">Out</span>' : `Round ${team.round}${team.submitted ? " · submitted" : ""}`}</td>
-    <td><span class="status ${team.online ? "online" : ""}">${team.online ? "Online" : "Offline"}</span></td>
-    <td class="num">${money(team.companyValue)}</td>
-    <td class="actions">
-      <form class="money-form" data-key="${esc(team.key)}" data-name="${esc(team.teamId)}"><input aria-label="New balance for ${esc(team.teamId)}" type="number" min="0" step="1" value="${team.companyValue}" required><button class="button" type="submit">Set</button></form>
-      <button class="button button-quiet" type="button" data-reset="${esc(team.key)}" data-name="${esc(team.teamId)}">Reset PIN</button>
-    </td>
+    <td class="team-name">${esc(team.teamId)}${team.hasPin ? "" : '<span class="tag">PIN RESET</span>'}</td>
+    <td>${esc(team.industry || "-")}</td>
+    <td>${team.isEliminated ? "Eliminated" : `Flash ${team.round} / 4${team.submitted ? " · submitted" : ""}`}</td>
+    <td><strong>${money(team.companyValue)}</strong></td>
+    <td><span class="status ${team.online ? "online" : ""}">${team.online ? "ONLINE" : "OFFLINE"}</span></td>
+    <td><div class="team-actions"><form class="money-form" data-key="${esc(team.key)}" data-name="${esc(team.teamId)}"><input aria-label="New balance for ${esc(team.teamId)}" type="number" min="0" step="1000" value="${team.companyValue}" required><button type="submit">APPLY</button></form><button class="reset-pin" type="button" data-reset="${esc(team.key)}" data-name="${esc(team.teamId)}">RESET PIN</button></div></td>
   </tr>`).join("");
 }
 
@@ -193,7 +192,7 @@ function renderActivities(items) {
   const firstLoad = !lastActivities;
   lastActivities = snapshot;
   if (!items.length) {
-    $("#activityFeed").innerHTML = `<p class="empty">Nothing reported yet.</p>`;
+    $("#activityFeed").innerHTML = `<p class="empty">No activity has been reported yet.</p>`;
     return;
   }
   $("#activityFeed").innerHTML = items.map(item => {
@@ -203,9 +202,9 @@ function renderActivities(items) {
     const alert = item.kind in ALERT_LABELS && item.kind !== "focus-return";
     const time = new Date(item.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     return `<article class="activity-item ${alert ? "alert" : ""} ${isNew ? "new" : ""}">
-      <div class="activity-top"><strong>${esc(item.teamId)}</strong><time>${esc(time)}</time></div>
-      <div class="activity-kind">${esc(ALERT_LABELS[item.kind] || item.kind)}${item.industry ? ` · ${esc(item.industry)}` : ""} · Round ${esc(item.round)}</div>
-      <p>${esc(item.detail)}</p>
+      <div class="activity-top"><span class="activity-team">${esc(item.teamId)}</span><time class="activity-time">${esc(time)}</time></div>
+      <span class="activity-kind">${esc(ALERT_LABELS[item.kind] || item.kind)}${item.industry ? ` · ${esc(item.industry)}` : ""} · Round ${esc(item.round)}</span>
+      <p class="activity-detail">${esc(item.detail)}</p>
     </article>`;
   }).join("");
 }
@@ -224,9 +223,9 @@ async function refresh() {
     renderActivities(data.activities || []);
     renderSettings(data.settings);
     $("#signalCount").textContent = data.recentAlerts ?? 0;
-    setConnection("Live", true);
+    setConnection("LIVE", true);
   } catch (error) {
-    setConnection("Reconnecting…", false);
+    setConnection("RECONNECTING", false);
     if (token()) message(error.message, "bad");
   } finally {
     refreshBusy = false;
@@ -272,5 +271,14 @@ $("#teamsBody").addEventListener("click", async event => {
 });
 
 document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
-setConnection(token() ? "Connecting…" : "Signed out", true);
+setConnection(token() ? "CONNECTING" : "SIGNED OUT", true);
+fetch("/api/health", { cache: "no-store" })
+  .then(response => {
+    if (!response.ok) throw new Error();
+    if (!token()) setConnection("API READY", true);
+  })
+  .catch(() => {
+    setConnection("API OFFLINE", false);
+    if (!token()) $("#loginError").textContent = "Cannot reach the event server. Check the deployment and its database, then reload this page.";
+  });
 setSignedIn(Boolean(token()));
