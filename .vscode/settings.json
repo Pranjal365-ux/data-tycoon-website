@@ -1,7 +1,4 @@
 {
-  "liveServer.settings.ignoreFiles": [
-    "**/.data-tycoon/**",
-    "**/server-data.json",
-    "**/server-data.json.tmp"
-  ]
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"]
 }

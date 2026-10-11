@@ -1,0 +1,8 @@
+content-src
+tests
+scripts
+docs
+.vscode
+Dockerfile
+.dockerignore
+*.md

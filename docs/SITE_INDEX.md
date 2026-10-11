@@ -1,345 +1,203 @@
-# Data Tycoon: Full Site Index
+# Data Tycoon: Site Index
 
-Reference map of every page, UI element, state field, API route, timer, storage key and security control in this repository. Line numbers refer to the commit this file was added on.
-
----
-
-## 1. Architecture at a glance
-
-| Layer | Production (Vercel) | Local development |
-|---|---|---|
-| Static site | `index.html` (player), `admin.html` (organizer), `src/*`, `data/*` served as static files | Same files served by `server.py` (`SimpleHTTPRequestHandler`) |
-| API | `api/index.py`, one FastAPI function. `vercel.json` rewrites `/api/:path*` to `/api?route=:path*` | `server.py` on `127.0.0.1:8000`, routes under `/api/*` |
-| Storage | MongoDB Atlas (`MONGODB_URI`, `MONGODB_DATABASE`, default `data_tycoon`) | JSON file at `../.data-tycoon/server-data.json` (or `DATA_PATH`) |
-| Team auth | Team name + Access PIN, signed team token | **None** (no PIN, no token; legacy path) |
-| Organizer auth | `ADMIN_PASSWORD`, signed 8h bearer token | Same scheme |
-
-Frontend is plain ES modules, no build step, no framework. All rendering is string templates written into `#page` via `innerHTML`.
-
-`apiBase()` (`src/app.js:106`) and `API_BASE` (`src/admin.js:1-5`): on localhost (any port except 3000) or `file:` the frontend calls `http://127.0.0.1:8000/api`; otherwise `${origin}/api`. `window.DATA_TYCOON_API_BASE = ""` in both HTML files, so the fallback is always used. `usesLegacyLocalApi()` (`app.js:114`) switches the player portal to the PIN-less local API.
-
-Contributors in history: pranjal (initial game flow), Samar Nanda (anti-camera overlay, later deleted), Sana Patel (Vercel/Mongo backend, PINs, organizer controls), Shreyas B S (docs).
+Map of every page, UI element, API route, storage key, timer and security control. See `docs/DEPLOYMENT.md` for hosting, environment variables and the pre-event checklist.
 
 ---
+
+## 1. Architecture
+
+| Layer | What runs it |
+|---|---|
+| Player site | Static files in `public/` (`index.html`, `src/app.js`, `src/flash.js`, `src/guard.js`, `src/app.css`, `src/fonts.css`, `fonts/`) |
+| API, private content, organizer console | `api/index.py` (FastAPI). On Vercel: one Python function (see `vercel.json`). Elsewhere: gunicorn/uvicorn via `Dockerfile` or `python server.py` |
+| Game rules (answer key) | `api/_rules.py`, server side only |
+| Private files | `api/_private/` (flash page images, datasets, console HTML/JS/CSS). Never served statically |
+| Database | MongoDB (`MONGODB_URI`, `MONGODB_DATABASE`) |
+
+**The server is the source of truth.** It scores every round, gates the flash and dataset, enforces the flash timer and the 30-minute round wait, and holds all team progress. The browser keeps only its session token and an unsent allocation draft.
+
+Local development and production run the same code (`server.py` simply starts `api/index.py` with static file serving turned on).
 
 ## 2. File inventory
 
-| File | Role | Status |
-|---|---|---|
-| `index.html` | Player shell: utility bar, masthead, `#page`, footer, flash overlay | Live |
-| `admin.html` | Organizer portal markup | Live |
-| `src/app.js` (1285 lines) | Entire player game: state, rendering, scoring, flash lock, anti-cheat, sync | Live |
-| `src/admin.js` (282 lines) | Organizer dashboard logic | Live |
-| `src/flash-viewer.js` | Renders flash PDFs to `<canvas>` with pdf.js 6.4.299 from jsDelivr | Live |
-| `src/data/events.js` | `EVENT_DURATION_MS` (5 min), 4 flash events pointing at `data/flashes/flash-N.pdf` | Live |
-| `src/data/industries.js` | 5 industries (name, description, `departments`) | Live (`departments` unused) |
-| `src/data/round-rules.js` | Parameters per industry, **payout ranking (answer key)**, `datasetFor()` | Live |
-| `src/data/leaderboard.js` | localStorage leaderboard cache, sorting, rank lookup | Live |
-| `src/styles.css` | Base newspaper theme, tokens, anti-cheat cover | Live (`?v=6`) |
-| `src/editorial.css` | Masthead, utility bar, breaking strip, front page | Live (no version query) |
-| `src/gameflow.css` | Phase bar, dashboard, chart, allocation table, flash overlay | Live (`?v=12`) |
-| `src/security.css` | `@media print` hides everything | Live (`?v=3`) |
-| `src/admin.css` | Organizer portal styles | Live (`?v=4`) |
-| `src/minigame-ui.js`, `src/data/minigames.js`, `src/minigames.css` | Wordle / word search / anagram / sudoku per flash | **Dead code**, not imported or linked anywhere |
-| `src/data/industry-datasets.js` | Sample "Nova Foods" style company data | **Dead code** |
-| `api/index.py` (814 lines) | Production API | Live |
-| `server.py` (581 lines) | Local web + API server | Local only |
-| `vercel.json` | API rewrite only, no headers | Live |
-| `requirements.txt` | `fastapi`, `pymongo` | Live |
-| `.env.example` | `ADMIN_PASSWORD`, `ADMIN_SESSION_SECRET`, `MONGODB_URI`, `MONGODB_DATABASE`, `ALLOWED_ORIGIN`, `HOST`, `PORT` | Template |
-| `ADMIN_PORTAL.md` | Deploy/run guide | Partly stale (see section 12) |
-| `.vscode/settings.json` | Live Server ignores the data store | Dev |
-| `data/flashes/flash-1..4.pdf` | Round storyline flashes, about 16 to 18 MB each, 6 pages | Static, publicly fetchable |
-| `data/round-datasets/flash1..4/*` | 20 datasets (5 industries x 4 rounds). Food flash 1 and 2 are `.xlsx`, everything else `.csv` | Static, publicly fetchable |
+| Path | Role |
+|---|---|
+| `public/index.html` | Player shell: top bar, step navigation, page container, flash overlay, confirm dialog, toasts |
+| `public/src/app.js` | Player app: session, polling, rendering of all views, actions |
+| `public/src/flash.js` | Flash viewer: fetches page images with the team token, draws them on canvas, adds the team watermark |
+| `public/src/guard.js` | Flash integrity guard (screenshots, tab/app switching, printing, devtools, copy) |
+| `public/src/app.css`, `public/src/fonts.css`, `public/fonts/*.woff2` | Styles and self-hosted fonts |
+| `api/index.py` | API routes, organizer console route, site fallback, security headers |
+| `api/_rules.py` | Industries, parameters, rankings, multipliers, bands, validation, scoring, dataset file names |
+| `api/_worker.py` | Gunicorn worker with a 75 s keep-alive (Docker/Azure) |
+| `api/_private/flashes/flash-N/page-K.webp` | Rendered flash pages (6 per round, about 1.4 MB per round) |
+| `api/_private/datasets/flashN/*` | 20 datasets (Food rounds 1 and 2 are `.xlsx`, everything else `.csv`) |
+| `api/_private/console/` | Organizer console `admin.html`, `admin.js`, `admin.css` |
+| `content-src/flashes/flash-N.pdf` | Source PDFs (not deployed). Rebuild images with `scripts/build_flash_images.py` |
+| `scripts/reset_event_data.py` | Clears teams, activity, seat counters and rate limits before the event |
+| `server.py` | Local / single-server runner |
+| `Dockerfile`, `.dockerignore` | Always-on container for Azure App Service / Container Apps |
+| `vercel.json`, `.vercelignore` | Vercel deployment |
+| `tests/test_api.py`, `tests/conftest.py` | API tests (needs MongoDB) |
+| `tests/e2e/e2e.cjs` | Browser end-to-end test (Playwright) |
+| `tests/load/load_test.py` | Concurrent load test |
 
----
+## 3. Player site
 
-## 3. Player portal (`index.html` + `src/app.js`)
-
-### 3.1 Static shell (`index.html`)
-
-| Element | ID / class | Behavior |
-|---|---|---|
-| Utility bar | `.utility-bar` | Two labels plus **RETURN TO LOGIN** button `#returnToLogin` (`data-action="login"`), hidden on the login page |
-| Masthead | `.masthead` | Meta line, "DT" seal, title link (`data-action="home"`, goes to login page), "SPECIAL EDITION" stamp, motto |
-| Breaking strip | `.breaking-strip` | Static "NEWSROOM WIRE" text |
-| Page body | `main#page` | All views are injected here by `render()` |
-| Footer | `footer` | Event credit plus link to `./admin.html` |
-| Flash overlay | `#newsOverlay` (`role="dialog"`, `aria-modal`) | `#flashNumber`, `#countdown`, `#eventDocument` (PDF canvas host), `#flashTimerNotice`, `#finishFlashButton` (`data-action="finish-flash"`, only shown when timer is off) |
-
-### 3.2 Navigation
-
-* `state.page` is one of `login`, `industries`, `game`, `results`, `leaderboard`.
-* Phase bar (`renderPhaseBar`, `app.js:460`), hidden on login: `01 CHOOSE INDUSTRY` (plain span, not clickable), `02 ROUND DASHBOARD`, `03 ROUND RESULTS`, `LEADERBOARD` (buttons, `data-action="nav"`). Right side shows `<INDUSTRY> DESK` or `NO INDUSTRY CHOSEN`.
-* `showPage(id)` (`app.js:438`) redirects `industries` to `game` once an industry is locked, saves, renders, scrolls to top, and refreshes the leaderboard when opened.
-* "Home" and "Return to login" both just show the login page; they do **not** clear the team session or token.
-
-### 3.3 Views
-
-**Login (`renderLogin`, `app.js:516`)**
-* Left: "WELCOME, ANALYSTS." copy, event rules (start ₹1,000,000; ₹250,000 bonus before Flash 2 and Flash 3; ₹1,000 minimum per parameter), monitoring notice about screenshot signals.
-* Form `#loginForm`: `#teamId` (required, prefilled), `#pin` (password, 4 to 64 chars), two help lines, optional `#teamConnectionError` alert, submit **ENTER THE NEWSROOM**.
-* Submit handler (`app.js:1135`): blank team name falls back to `"Team Alpha"`. Calls `loadRemoteTeam()` which POSTs `/team/connect` (prod) or GETs `/team/{id}` (local). Stores the token, merges server state over any browser copy (server authoritative for progress maps; local `subsystemResults` kept), restores or clears the saved active flash, picks the resume page, logs `team-connected`.
-
-**Industry selection (`renderIndustries`, `app.js:543`)**
-* Selection strip with status text and **CONFIRM & PROCEED TO DASHBOARD** (`confirm-industry`), disabled until a pick is made, reads **INDUSTRY LOCKED** afterwards.
-* Five cards (Food, Electronics, Travel and Auto, Pharma, Education): number, description, live seat count (`N of 20 seats remaining`, from `/industry-capacity` every 10 s while on this page), **CHOOSE THIS INDUSTRY** (`select-industry`) or **NO SEATS LEFT**.
-* Confirm POSTs `/team/industry`; server reserves a seat atomically. Error shown via `state.industrySelectionError`.
-
-**Round dashboard (`renderGame`, `app.js:590`)**
-Guard states: no industry (link back), eliminated (message + leaderboard link).
-Sections in order:
-1. Live label `ROUND 0N OF 04` and heading.
-2. Market tape: round budget, leaderboard rank (`#n of N teams`), round progress, industry.
-3. **How to play** card: bonus or carry-forward line, 4 numbered steps.
-4. **Mandatory storyline flash** card with **OPEN FLASH** (`open-flash`).
-5. **Dataset** card with **DOWNLOAD ROUND N DATASET (CSV/XLSX)** (`download-dataset`), disabled until the flash is complete; becomes "DATASET DOWNLOADED · DOWNLOAD AGAIN".
-6. **Net capital trend** SVG chart (`companyValueChart`, `app.js:477`): start point plus one point per submitted round, last value, % change arrow, colored by trend.
-7. **Investment allocation desk**: 10 rows (5 common, 5 industry-specific), number inputs `#alloc-0..9` (`data-allocation`, min 1000, max budget, step 1), disabled until flash done + dataset downloaded + round not yet submitted. Totals box: required budget, `#totalInvestedAmount`, `#remainingCashAmount`. Status line `#allocationTotal` (valid/invalid). **LOCK & SUBMIT ROUND N** `#submitAllocation` (`submit-round`).
-
-**Results (`renderResults`, `app.js:675`)**
-* Heading (INVESTMENT RESULTS or TEAM ELIMINATED), chart, final payout, net profit, bonus line, disqualification note, current rank.
-* Table: parameter, allocation %, invested, amount returned.
-* Footer action: eliminated: leaderboard button; rounds 1 to 3: `#roundWaitCountdown` + **PROCEED TO ROUND N+1** (`next-round`), locked while the 30 min wait runs; round 4: final leaderboard button.
-
-**Leaderboard (`renderLeaderboard`, `app.js:740`)**
-* Table: medal rank, team name (with "(YOU)" highlight), industry, round reached, net capital.
-* Buttons: back to dashboard, **REFRESH RANKINGS** (`refresh-leaderboard`).
-* Data comes from `/leaderboard` and is cached in localStorage; refreshed every 15 s only while this page is open.
-
-### 3.4 Click actions (`data-action`, delegated in `app.js:1054`)
-
-`home`, `login`, `nav` (+`data-page`), `select-industry`, `confirm-industry`, `open-flash`, `finish-flash`, `download-dataset`, `submit-round`, `next-round`, `refresh-leaderboard`.
-
-### 3.5 Game rules and scoring
-
-* Budget per round: `roundBudget()` = current `companyValue` + ₹250,000 if round is 2 or 3 (`app.js:14-21`). Round 1 uses ₹1,000,000.
-* Valid allocation: every parameter an integer of at least ₹1,000 and the total exactly equal to the budget (`allocationValid`, `app.js:795`).
-* Gating per round: open flash, finish it (timer expiry or manual close), download dataset, then invest, then submit once.
-* Multipliers (`round-rules.js`): for each industry and round, the 10 parameters are ranked; rank maps to base multiplier `[2.7, 1.8, 1.5, 1.2, 1, 0.8, 0.7, 0.5, 0.3, 0]`.
-* Allocation bands (`computeEffectiveMultiplier`, `app.js:806`), by % of round budget:
-  * 2.7: up to 20% x0.8, 20 to 40% full, 40 to 60% x0.9, 60 to 80% x0.7, over 80% x0.6
-  * 1.8 / 1.5 / 1.2: up to 40% full, 40 to 60% x0.9, 60 to 80% x0.7, over 80% x0.6
-  * 1.0 / 0.8 / 0.7 / 0.5: flat
-  * 0.3 ("loss trap"): over 40% becomes **-0.9**
-  * 0 ("zero trap"): over 80% **eliminates** the team (payout 0, `isEliminated`)
-* Result: `finalPayout` (rounded sum) becomes the new `companyValue`; history entry stores allocations, per-parameter returns, budget, bonus, net profit, change %.
-* After submitting rounds 1 to 3 (not eliminated), `roundWaitUntil` = now + 30 min unless the organizer has disabled the wait. Advancing calls `/team/advance-round`, which the server validates.
-* `datasetFor(industry, round)` gives `./data/round-datasets/flash{round}/{slug}.{csv|xlsx}`.
-
-### 3.6 Flash (storyline PDF) system
-
-* `startEvent` (`app.js:971`) refreshes timer settings, writes `{id, startedAt, duration}` to `data-tycoon-active-event-v6-{team}`, logs `flash-started`, opens the overlay.
-* `activeEvent()` (`app.js:884`) computes remaining time from `max(startedAt, flashTimer.changedAt)`. When the timer is on and time runs out, it marks the round's flash complete and logs `flash-completed`.
-* Timer **off**: countdown shows "TIMER OFF" and **DONE READING** appears (`finishFlashManually`, `app.js:990`).
-* While open: `#appRoot.inert = true`, body scroll locked, 200 ms tick while timed.
-* Active flash is synced to the server and restored on sign-in, so reloading or another device cannot skip the lock.
-* PDF rendering (`flash-viewer.js`): pdf.js loaded from `cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299`, pages lazily drawn to canvases (max 1.5x scale) with `IntersectionObserver`, no browser PDF toolbar, so no built-in save/print/download buttons.
-
-### 3.7 Client state (`defaults`, `app.js:23`)
-
-`page`, `teamId`, `industry`, `pendingIndustry`, `resumePage`, `round`, `scoringVersion` (2), `companyValue`, `valueEnteredAt` (microseconds, tie-break), `roundWaitUntil`, `moneyRevision`, `allocations`, `allocationRound`, `allocationBudget`, `allocationSetupVersion`, `history`, `flashCompletedRounds`, `datasetDownloadedRounds` (keyed `Industry-round`), `offlineBonusClaimed` (legacy, unused), `round2GrantApplied` (legacy, unused). Also set at runtime: `isEliminated`, `industrySelectionError`.
-
-### 3.8 Browser storage keys
-
-| Key | Storage | Content |
-|---|---|---|
-| `data-tycoon-game-v5` | localStorage | Last active game state |
-| `data-tycoon-team-{slug}` | localStorage | Per-team state copy |
-| `data-tycoon-active-event-v6-{slug}` | localStorage | Currently open flash |
-| `data-tycoon-team-token-{normalized name}` | localStorage | Team session token (30 days) |
-| `data-tycoon-active-team` | localStorage | Slug of last signed-in team |
-| `data-tycoon-leaderboard-v2` | localStorage | Cached leaderboard |
-| `data-tycoon-puzzle-*` | localStorage | Dead minigame code only |
-| `data-tycoon-organizer-session` | sessionStorage | Organizer bearer token (8 h) |
-
-### 3.9 Polling and timers (player)
-
-| Interval | Function | Condition |
-|---|---|---|
-| 180 ms debounce | `scheduleTeamSync` POST `/team/sync` | Any save; retries every 5 s on failure |
-| 250 ms debounce | allocation persist | While typing allocations |
-| 200 ms | `syncEventOverlay` | Flash open and timer on |
-| 1 s | `syncRoundWaitUI` | Always (no-op off results page) |
-| 5 s | `/settings/round-wait` | Always |
-| 5 s | `/settings/flash-timer` | Only while a flash is saved as open |
-| 8 s | `/team/{id}/balance` (organizer edits) | Signed in |
-| 10 s | `/industry-capacity` | On industries page |
-| 15 s | `/team/heartbeat` | Signed in |
-| 15 s | `/leaderboard` | On leaderboard page |
-
-### 3.10 Activity kinds sent by the player
-
-`team-connected`, `flash-started`, `flash-completed`, `dataset-downloaded`, `round-submitted`, `round-opened`, `organizer-balance-applied`, `screenshot-shortcut`, `clipboard-shortcut`. Server adds `organizer-money-edit`. The organizer feed only displays `screenshot-shortcut`.
-
----
-
-## 4. Organizer portal (`admin.html` + `src/admin.js`)
-
-### 4.1 Elements
+### 3.1 Shell (`public/index.html`)
 
 | Element | ID | Behavior |
 |---|---|---|
-| Header brand | `.brand` | Link back to player site |
-| Connection pill | `#connectionState` | CONNECTING, API READY, API OFFLINE, LIVE, RECONNECTING |
-| Login form | `#loginPanel`, `#adminLoginForm`, `#adminPassword`, `#loginError` | POST `/admin/login`; token saved to sessionStorage; password field cleared |
-| Sign out | `#logoutButton` | Clears token, stops polling |
-| Integrity note | `.integrity-note` | Explains what screenshot signals can and cannot detect |
-| Flash timer control | `#flashTimerStatus`, `#flashTimerDescription`, `#flashTimerToggle` | PATCH `/admin/settings/flash-timer`. Server default is **off** |
-| Round wait control | `#roundWaitStatus`, `#roundWaitDescription`, `#roundWaitToggle` | PATCH `/admin/settings/round-wait`. Default **on**; turning off zeroes every team's `roundWaitUntil` |
-| Stats | `#teamCount`, `#onlineCount`, `#signalCount` (screenshot signals in last 10 min), `#combinedBalance` | From dashboard payload |
-| Teams table | `#industryFilter` (client-side filter, shows seats left), `#teamsBody`, `#refreshButton` | Columns: #, team, industry, round (or Eliminated), balance, ONLINE/OFFLINE (seen within 45 s), **SET BALANCE** form |
-| Balance form | `form.money-form[data-team]` | PATCH `/admin/teams/{id}/money`; table re-render is skipped while an input has focus |
-| Activity feed | `#activityIndustryFilter`, `#activityFilter` (server-side filters), `#activityFeed` | Latest 100 screenshot signals |
-| Messages | `#dashboardError` | Errors and confirmation text |
+| Brand | `.brand` | Link to `/` |
+| Connection status | `#connection` | "Live" or "Reconnecting…" (amber, pulsing) |
+| Team chip | `#teamChip` | `Team name · Industry` |
+| Sign out | `#signOut` | Confirms, then clears the session |
+| Step navigation | `#steps` | Four large steps (see 3.2) |
+| Page | `#page` | Next-step banner plus the current view |
+| Flash overlay | `#flash` | Title, hint, timer `#flashTimer`, close button `#flashClose`, pages `#flashPages`, watermark `#flashWatermark`, shield `#flashShield`, "You left the flash" card `#flashLeaveCard` |
+| Confirm dialog | `#confirmDialog` | Used for industry lock, submit, sign out |
+| Toasts | `#toasts` | Success, info and error messages |
 
-### 4.2 Behavior
+There is no link to the organizer console anywhere on the player site.
 
-* Single endpoint poll: `GET /admin/dashboard` every **2 s** (setTimeout chain) returns teams, activities, both settings and industry capacity.
-* Snapshots (`lastTeamsSnapshot`, `lastActivitiesSnapshot`) avoid needless DOM rewrites.
-* Any 401 while holding a token signs the organizer out.
-* Organizer balance edit sets `adminOverride` and bumps `moneyRevision`; the player picks it up within 8 s. The override sticks until the team submits a new round result.
+### 3.2 Step navigation and next-step banner
 
----
+Steps: **1 Industry**, **2 Round N of 4**, **3 Results**, **4 Leaderboard**. Each shows a status line (for example "Food (locked)", "Download the dataset", "Round 1: ₹9,96,000"). The current step is highlighted, completed steps show a check, and locked steps show a lock with the reason ("Choose an industry first", "Submit a round to see results"). On phones the strip scrolls sideways and keeps the current step in view.
 
-## 5. Production API (`api/index.py`)
+The dark **Next step** banner always says what to do now, with a button that does it:
 
-All responses `Cache-Control: no-store`. OpenAPI/docs disabled. Request bodies capped at 1 MB and must be JSON objects. Generic 500 handler hides exceptions.
-
-| Method | Route | Auth | Purpose |
-|---|---|---|---|
-| OPTIONS | any | none | 204, allows GET/POST/PATCH, `Content-Type, Authorization`. No `Access-Control-Allow-Origin` is sent, so cross-origin calls are effectively blocked |
-| POST | `team/connect` | none, rate limited 8 failures/min/IP | Create team (sets PIN) or verify PIN; migrates pre-PIN teams once; returns team token + team |
-| GET | `health` | none | Mongo ping |
-| GET | `settings/flash-timer` | none | `{enabled, changedAt}` (default off) |
-| GET | `settings/round-wait` | none | `{enabled, changedAt}` (default on) |
-| POST | `admin/login` | rate limited 8 failures/min/IP | Constant-time password check, returns 8 h token |
-| GET | `team/{id}/balance` | team token | `companyValue`, `valueEnteredAt`, `moneyRevision` |
-| GET | `team/{id}` | team token | Team record minus `adminOverride`, `pinSalt`, `pinHash` |
-| GET | `leaderboard` | none | All teams: id, industry, round, value, `valueEnteredAt`, `isEliminated`; sorted value desc, earliest entry, name |
-| GET | `admin/dashboard` | admin | Teams (+online), screenshot activities (filters `teamId`, `industry`, limit 100), settings, capacity |
-| GET | `admin/teams` | admin | Teams only (unused by current UI) |
-| GET | `admin/activities` | admin | Screenshot activities, limit 250 (unused by current UI) |
-| GET | `industry-capacity` | none | Per industry: capacity 20, assigned, remaining |
-| POST | `team/sync` | team token | Upsert team snapshot (see 5.2) |
-| POST | `team/industry` | team token | Atomic seat reservation, industry lock |
-| POST | `team/advance-round` | team token | Server-checked round advance with 30 min wait |
-| POST | `team/activity` | team token | Append activity, update last seen |
-| POST | `team/heartbeat` | team token | Update last seen |
-| PATCH | `admin/settings/flash-timer` | admin | Toggle; `changedAt` updates only on real change |
-| PATCH | `admin/settings/round-wait` | admin | Toggle; disabling clears all waits |
-| PATCH | `admin/teams/{id}/money` | admin | Set balance 0 to 10^12, logs `organizer-money-edit` |
-
-### 5.1 MongoDB collections
-
-| Collection | `_id` | Notes |
+| Stage | Banner | Button |
 |---|---|---|
-| `data_tycoon_teams` | `teamKey` (casefolded, whitespace-normalized, max 80 chars) | Index `leaderboard_value_first` (companyValue desc, valueEnteredAt asc, teamId) |
-| `data_tycoon_activities` | ObjectId | Indexes on (teamKey, _id desc) and `activity_kind_recent` (kind, _id desc). Pruned to latest 1500 every 100 writes per instance |
+| No industry | Choose your industry | Choose industry |
+| Flash not read | Open the Round N flash | Open flash |
+| Dataset not downloaded | Download the Round N dataset | Download dataset |
+| Ready to invest | Invest ₹X and submit | Go to the table |
+| Submitted, waiting | Round N+1 opens in mm:ss (live countdown) | View results |
+| Next round open | Round N+1 is open | Start Round N+1 |
+| Finished / eliminated | Final message | View leaderboard |
+
+The page moves itself: after submitting it shows Results; when the next round opens the button appears without a reload; after advancing it shows the new round.
+
+### 3.3 Views
+
+* **Sign in**: game summary and four rule cards; form with team name, team PIN, help text, inline error.
+* **Industry**: five cards with description, seat bar (`N of 20 seats left`), and a choose button that opens a confirmation. Locked teams see their industry and a link to the round.
+* **Round**: header (industry, round, budget to invest, leaderboard rank), budget explanation (carried balance plus bonus), three task cards (Read the flash, Download the dataset, Invest and submit) each marked done / current / locked, then the investment table: ten parameters (common or industry specific), rupee inputs, live share %, invested and left-to-invest totals, validation message, Clear, and Submit (with confirmation).
+* **Results**: next-round panel (countdown, start button or game over), payout, profit, budget, bonus and elimination notes, balance chart, where-the-money-went table, earlier rounds as expandable cards.
+* **Leaderboard**: rank (medals for top three), team, industry, progress, balance; own team highlighted; auto refresh every 10 s while open; manual Refresh.
+
+### 3.4 Data flow and timers
+
+| What | When |
+|---|---|
+| `GET /api/team/state` | Every 5 s (20 s when the tab is hidden and no flash is open; backs off on errors). Also immediately on return to the tab and when the network comes back |
+| `GET /api/leaderboard` | Every 10 s while on Round, Results or Leaderboard |
+| Countdown tick | Every 1 s, from server-provided remaining times (immune to wrong device clocks) |
+| Request timeout | 12 s (20 s for sign-in, 30 s for datasets) |
+
+Every action replaces the local state with the server's response, so the page never needs a reload. A second tab or a teammate's device converges within one poll.
+
+### 3.5 Browser storage
+
+| Key | Storage | Content |
+|---|---|---|
+| `dt-session-v2` | localStorage | `{teamId, token}` |
+| `dt-draft-<team>-<round>-<budget>` | localStorage | Unsubmitted allocation inputs |
+| `dt-organizer-session` | sessionStorage | Organizer token (console only) |
+
+## 4. Game rules (server side, `api/_rules.py`)
+
+* Start balance ₹10,00,000. Budget each round = current balance, plus ₹2,50,000 in rounds 2 and 3.
+* Allocations must be whole rupees, at least ₹1,000 per parameter, and total exactly the budget.
+* Each round ranks the ten parameters; rank maps to base multipliers 2.7, 1.8, 1.5, 1.2, 1.0, 0.8, 0.7, 0.5, 0.3, 0.
+* Bands by share of budget: 2.7 is x0.8 up to 20%, full to 40%, x0.9 to 60%, x0.7 to 80%, x0.6 above; 1.8/1.5/1.2 are full to 40%, then x0.9, x0.7, x0.6; 1.0/0.8/0.7/0.5 are flat; 0.3 becomes -0.9 above 40%; 0 above 80% eliminates the team (payout 0).
+* Payout = rounded sum (half up, matching the original JavaScript; verified identical on 5,000 random allocations). The payout becomes the new balance.
+* After rounds 1 to 3 a 30-minute wait starts (enforced only while the organizer setting is on).
+* Up to 20 teams per industry, reserved atomically.
+
+## 5. API (`api/index.py`)
+
+All JSON responses are `no-store` unless noted. Bodies are limited to 64 KB. Database outages return a friendly 503.
+
+### Public
+
+| Method | Route | Notes |
+|---|---|---|
+| GET | `/api/health` | Database ping |
+| GET | `/api/leaderboard` | Team, industry, round, balance, eliminated. Cached 3 s |
+| GET | `/api/industry-capacity` | Seats per industry. Cached 3 s |
+| POST | `/api/team/connect` | `{teamId, pin}`. Creates the team on first sign-in. Returns `{token, state}` |
+
+### Team (header `Authorization: Team <token>`)
+
+| Method | Route | Notes |
+|---|---|---|
+| GET | `/api/team/state` | Full player state plus settings and server time; doubles as the heartbeat |
+| POST | `/api/team/industry` | `{industry}`; locks it, respects the 20-team cap |
+| POST | `/api/team/flash/open` | Starts the flash for the current round |
+| POST | `/api/team/flash/close` | Refused while the timer is running; marks the flash complete |
+| GET | `/api/team/flash/page/{n}?round=` | WebP page; only for the current round's open or finished flash, or earlier rounds |
+| GET | `/api/team/dataset` | Current round's file; only after the flash is finished; marks it downloaded |
+| POST | `/api/team/submit` | `{round, allocations}`; validated and scored on the server, once per round |
+| POST | `/api/team/advance` | `{round}`; opens the next round when allowed; safe to repeat |
+| POST | `/api/team/activity` | `{kind, detail}`; integrity events only (allowlist), max 30 per minute per team |
+
+### Organizer (header `X-Console-Key: <console path>`; all but login also need `Authorization: Bearer <token>`)
+
+| Method | Route | Notes |
+|---|---|---|
+| POST | `/api/admin/login` | `{password}`; 8-hour token |
+| GET | `/api/admin/dashboard?kind=&team=&industry=` | Teams, alerts/activity (latest 150), alert count for 10 min, settings, seats |
+| PATCH | `/api/admin/settings` | `{flashTimer?, roundWait?}` |
+| PATCH | `/api/admin/team-balance` | `{teamKey, companyValue}` |
+| POST | `/api/admin/team-reset-pin` | `{teamKey}`; clears the PIN and signs out all of the team's devices |
+
+Without the right console key every organizer route answers 404.
+
+### Pages
+
+| Route | Notes |
+|---|---|
+| `/<ADMIN_CONSOLE_PATH>/` (+ `admin.js`, `admin.css`) | Organizer console; optional IP allowlist; `noindex` |
+| anything else not in `public/` | 404 page |
+
+## 6. Database collections
+
+| Collection | Key | Notes |
+|---|---|---|
+| `data_tycoon_teams` | normalized team name | Progress, balance, history, PIN hash (PBKDF2-SHA256, per-team salt and iteration count), session version |
+| `data_tycoon_activities` | ObjectId | Integrity alerts and game events; indexed by team, kind, industry; auto-deleted after 14 days |
 | `data_tycoon_settings` | `flash-timer`, `round-wait` | `{enabled, changedAt}` |
-| `data_tycoon_industry_capacity` | industry name | `{count}` counter for atomic seat reservation |
+| `data_tycoon_industry_capacity` | industry | Seat counters used for atomic reservation and for display |
+| `data_tycoon_rate_limits` | ObjectId | Failed sign-in records; auto-deleted after 15 minutes |
 
-### 5.2 `team/sync` server rules
+Older team records written by the previous version are read correctly (history, flags and active flash are converted on the fly), and their PINs still work.
 
-* Round clamped 1 to 4. Moving forward is rejected unless it is exactly +1, the previous round has a history entry, and (when wait is on) a wait was set and has passed.
-* `industry` is never taken from the client; it comes only from `team/industry`.
-* `moneyRevision` is preserved from the server. If `adminOverride` is set and no new round result arrives, the server keeps the organizer's balance.
-* `valueEnteredAt` is reset when the balance changes (tie-break: earlier wins).
-* A new history round starts the 30 min wait server side.
-* Sanitizers: `safe_allocations` (max 20 keys, finite, 0 to 10^12), `safe_boolean_map` (max 20), `safe_active_flash` (only `flash-1..4`, duration up to 300000), history kept to last 4 items.
+## 7. Organizer console
 
----
+* Stats: teams, online now (seen in the last 30 s), integrity alerts in the last 10 minutes, combined balance.
+* Controls: flash timer (on = five-minute lock, turning it on restarts the lock for open flashes), 30-minute round wait.
+* Teams table: rank, name (with "PIN reset" tag), industry, progress, online status, balance, Set balance, Reset PIN. Filter by industry. Rows do not refresh while you are typing a balance.
+* Alerts feed: filter by type (all alerts, screenshots, tab switches, all activity), industry and team; new alerts flash briefly. Refreshes every 3 s.
 
-## 6. Local server (`server.py`) differences
+## 8. Security and integrity controls
 
-* Loads `.env` itself. Default CORS `Access-Control-Allow-Origin: *` unless `ALLOWED_ORIGIN` is set. Adds `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin`.
-* Refuses dotfile paths (`.env`, `.git`) and `server-data.json` on GET and HEAD. `/admin` maps to `admin.html`.
-* **No team authentication at all**: no `team/connect`, no PIN, no token checks on team routes.
-* `team/sync` stores only `{round, finalPayout, eliminated}` per history item and does not persist `flashCompletedRounds`, `datasetDownloadedRounds` or `activeFlash`, so resume behaves differently from production.
-* Heartbeats update an in-memory `LAST_SEEN` map only. Online window: 20 s on `admin/teams`, 45 s on `admin/dashboard`.
-* Seat reservation is a count under a process lock (fine for one process).
+**Server**
+* Scoring, gating, timers and waits are enforced on the server; the browser cannot set its balance, round or history.
+* The answer key, flashes, datasets and console are only under `api/`, which is never served as static content.
+* Team PINs: PBKDF2-SHA256 with a random salt; hashing runs one at a time per process so a sign-in rush cannot stall the game; recent successful checks are remembered in memory using a server-keyed HMAC.
+* Signed tokens (HMAC-SHA256): team tokens last 24 h and are revoked by a PIN reset; organizer tokens last 8 h; a team token is never accepted as an organizer token.
+* Rate limits stored in MongoDB (shared across instances): 10 wrong PINs per team per 5 minutes, 30 per IP per minute; organizer 8 per IP per minute and 40 overall per 5 minutes.
+* Console hidden behind a secret path, optional IP allowlist, `noindex`.
+* Headers on every response: strict Content-Security-Policy (no third-party hosts), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, COOP.
 
----
+**Browser, while a flash is open (`guard.js`)**
+* Print Screen detected on key press and key release (Windows only sends the release).
+* Win+Shift (Windows Snipping Tool) and Cmd+Shift (macOS 3/4/5) blank the flash as soon as the two keys are held, before the capture key, and alert the organizers.
+* Switching tab, app or window, opening a screenshot tool, or minimizing: the flash is blanked, the organizers are alerted, and on return a "You left the flash" card shows how long the player was away (a return event is logged too).
+* Pointer leaving through the window edge blanks the flash until it returns (no alert).
+* Print, save, view-source, developer-tools shortcuts, copy, select, drag and right-click are blocked; printing shows nothing.
+* Every page carries a watermark with the team name and time, so photos and screenshots are traceable.
+* The rest of the app is `inert` behind the flash, and reloading reopens a locked flash.
 
-## 7. Security and integrity controls (as implemented)
-
-### 7.1 Authentication and sessions
-* Team PINs: PBKDF2-HMAC-SHA256, 260,000 iterations, 16-byte random salt, constant-time compare. Raw PIN never stored; hash/salt stripped from every response.
-* Team tokens: HMAC-SHA256 signed, `scope: "team"`, bound to `teamKey`, 30 day expiry. Sent as `Authorization: Team <token>`.
-* Organizer tokens: HMAC-SHA256 signed, 8 h expiry, rejected if `scope == "team"` so a team token cannot act as admin. Sent as `Authorization: Bearer <token>`.
-* Signing secret: `ADMIN_SESSION_SECRET`, falling back to `ADMIN_PASSWORD`.
-* Login rate limiting: 8 failed attempts per IP per minute, separately for teams and organizers (in-memory).
-* Concurrency: duplicate first sign-ins resolved via `DuplicateKeyError`; seat reservation via conditional `$inc`; round advance via filtered `find_one_and_update`.
-
-### 7.2 Anti-cheat in the browser (`app.js:1002-1052`, CSS)
-* Always blocked (capture phase): copy, cut, paste, context menu, text selection start, drag start, Ctrl/Cmd+C/V/X, Ctrl+Insert, Shift+Insert (logged as `clipboard-shortcut`).
-* Always blocked: Ctrl/Cmd+P, Ctrl/Cmd+S.
-* Screenshot shortcuts (PrintScreen, Ctrl/Cmd+Shift+S/3/4/5) prevented and, during a flash, reported as `screenshot-shortcut`.
-* Tab hidden during a flash: `body.anti-cheat-cover` blacks out the page with "RETURN TO THE DATA TYCOON TAB".
-* `@media print` hides the whole document (`security.css`).
-* Flash rendered to canvas, app root made `inert`, timer state persisted server side.
-* `user-select: none` on the flash document.
-
-### 7.3 Output safety
-* All dynamic text goes through `esc()` / `escapeHtml()` before being placed in templates.
-* Text inputs trimmed and length-capped server side via `clean_text`.
-
----
-
-## 8. Known gaps and risks (observed, not yet changed)
-
-Ranked roughly by impact on a live event.
-
-1. **Answer key is shipped to the browser.** `src/data/round-rules.js` contains the full ranking for every industry and round. Anyone can open it from DevTools or the URL and know the optimal allocation before the event.
-2. **Scores are computed on the client and trusted by the server.** `team/sync` accepts any `companyValue` (0 to 10^12), any `history`, and `isEliminated: false`, so a team with a valid token can set its own balance from the console. It can also send a lower `round` (rewinding is not rejected).
-3. **Flash PDFs and datasets are public static files** at predictable paths (`data/flashes/flash-4.pdf`, `data/round-datasets/flash4/...`). The flash and download gates exist only in the UI.
-4. Rate limiter is per serverless instance and keyed on the first `X-Forwarded-For` value; it resets on cold start.
-5. `vercel.json` sets no security headers (no CSP, `X-Frame-Options`/`frame-ancestors`, `nosniff`, `Referrer-Policy`), so the portal can be framed.
-6. Seat counter (`data_tycoon_industry_capacity`) and the displayed capacity (`count_documents`) are computed differently and can drift if teams are deleted or edited by hand.
-7. Team token lives 30 days in localStorage with no revoke path; organizer cannot reset a team's PIN from the UI.
-8. Global copy/paste and selection blocking also applies to the login form (cannot paste a PIN) and allocation inputs.
-9. Players' `clipboard-shortcut` events are written to the database on every Ctrl+C but never displayed.
-10. Client default `flashTimerSettings.enabled = true` while the server default is off; the UI corrects itself after the first settings fetch.
-11. Results text for eliminated teams says "any round bonus is still credited", but eliminated teams can never play another round.
-12. Local `server.py` has no team auth and uses `*` CORS; fine for localhost, unsafe if exposed.
-
----
-
-## 9. Visual system
-
-* Tokens (`styles.css :root`): `--paper #f5edda`, `--paper-dark #e9e1cf`, `--ink #171717`, `--muted #77705f`, `--red #8e211b`, `--green #23652c`, `--rule #b8ad98`.
-* Fonts (Google Fonts): Playfair Display (headlines), Libre Baskerville (body serif), DM Mono (labels, numbers). Admin uses Arial plus DM Mono.
-* Breakpoints: 460, 560, 620, 700, 800, 850 px (player); 700, 1050 px (admin).
-* Many dashboard and results styles are inline `style=""` attributes inside `app.js` templates rather than classes.
-* Cache-busting query strings to bump when editing: `styles.css?v=6`, `gameflow.css?v=12`, `security.css?v=3`, `app.js?v=37`, `admin.css?v=4`, `admin.js?v=9`. `editorial.css` has none.
-
----
-
-## 10. Content data
-
-* Industries and their 10 parameters: 5 common (R&D & Innovation, Marketing & Sales, Supply Chain & Logistics, Technology & Digitalization, Workforce & Talent) plus 5 industry-specific (`round-rules.js:9-15`).
-* Datasets: about 500 to 600 rows each, monthly or weekly time periods, column names vary per industry and round. Food flash 1/2 are Excel workbooks (`Food_Dataset`, `Food_Weekly_Dataset`).
-* Flashes: 4 PDFs, one per round.
-
----
-
-## 11. Environment variables
-
-| Variable | Used by | Purpose |
-|---|---|---|
-| `ADMIN_PASSWORD` | both servers | Organizer login, fallback signing secret |
-| `ADMIN_SESSION_SECRET` | both servers | Token signing secret |
-| `MONGODB_URI` | `api/index.py` | Atlas connection |
-| `MONGODB_DATABASE` | `api/index.py` | Database name (default `data_tycoon`) |
-| `DATA_PATH` | `server.py` | JSON store location |
-| `ALLOWED_ORIGIN` | `server.py` | CORS allowlist |
-| `HOST`, `PORT` | `server.py` | Bind address |
-
----
-
-## 12. Documentation drift
-
-* `ADMIN_PORTAL.md` says the dashboard refreshes every five seconds; code and `admin.html` use two seconds.
-* `ADMIN_PORTAL.md` mentions "Vercel PostgreSQL"; the backend is MongoDB.
-* `ADMIN_PORTAL.md` ends with a stray `hiya` line.
-* `ADMIN_PORTAL.md` says the activity feed shows browser focus changes; the feed now shows only screenshot signals.
+**Limits (cannot be solved by any website):** a phone camera, a second device, phone screenshot buttons, screen recorders, and some Linux/ChromeOS capture tools never reach the browser. The watermark and in-room supervision cover those.

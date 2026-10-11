@@ -1,0 +1,9 @@
+.git
+.env
+.env.*
+content-src
+tests
+docs
+scripts
+.vscode
+**/__pycache__

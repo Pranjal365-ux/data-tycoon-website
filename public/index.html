@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f4efe4" />
+  <meta name="description" content="Data Tycoon: read the market news, analyse the data, invest your budget. TechTatva '26." />
+  <title>Data Tycoon · TechTatva '26</title>
+  <link rel="preload" href="./fonts/inter.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="./src/fonts.css?v=40" />
+  <link rel="stylesheet" href="./src/app.css?v=40" />
+  <script type="module" src="./src/app.js?v=40"></script>
+</head>
+<body>
+  <div id="appRoot" class="app">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Data Tycoon home">
+        <span class="brand-mark" aria-hidden="true">DT</span>
+        <span class="brand-text"><strong>Data Tycoon</strong><small>TechTatva '26</small></span>
+      </a>
+      <div class="topbar-right">
+        <span id="connection" class="connection" hidden><span class="dot" aria-hidden="true"></span><span id="connectionText">Live</span></span>
+        <span id="teamChip" class="team-chip" hidden></span>
+        <button id="signOut" class="button button-quiet" type="button" data-action="sign-out" hidden>Sign out</button>
+      </div>
+    </header>
+    <nav id="steps" class="steps" aria-label="Game sections" hidden></nav>
+    <main id="page" class="page" tabindex="-1">
+      <noscript><p class="notice">Data Tycoon needs JavaScript enabled.</p></noscript>
+      <p class="loading">Loading…</p>
+    </main>
+    <footer class="footer">Data Tycoon · TechTatva '26 · MIT Manipal</footer>
+  </div>
+
+  <div id="flash" class="flash" hidden role="dialog" aria-modal="true" aria-labelledby="flashTitle">
+    <div class="flash-bar">
+      <div class="flash-title"><strong id="flashTitle">Flash 1 of 4</strong><span id="flashHint">Read carefully. The dataset unlocks when you finish.</span></div>
+      <div class="flash-controls">
+        <span id="flashTimer" class="flash-timer" aria-live="off"></span>
+        <button id="flashClose" class="button button-primary" type="button" data-action="close-flash">Done reading</button>
+      </div>
+    </div>
+    <div class="flash-scroll">
+      <div id="flashPages" class="flash-pages"></div>
+      <div id="flashWatermark" class="flash-watermark" aria-hidden="true"></div>
+    </div>
+    <div id="flashShield" class="flash-shield" hidden><p id="flashShieldText">Flash hidden.</p></div>
+    <div id="flashLeaveCard" class="flash-leave" hidden role="alertdialog" aria-labelledby="flashLeaveTitle">
+      <div class="flash-leave-card">
+        <h2 id="flashLeaveTitle">You left the flash</h2>
+        <p>You were away for <b data-away-seconds>a few seconds</b>. Leaving the flash (switching tabs or apps, or opening a screenshot tool) is reported to the organizers.</p>
+        <p class="muted">The flash timer kept running while you were away.</p>
+        <button class="button button-primary" type="button">Continue reading</button>
+      </div>
+    </div>
+  </div>
+
+  <dialog id="confirmDialog" class="confirm-dialog">
+    <form method="dialog">
+      <h2 id="confirmTitle">Are you sure?</h2>
+      <p id="confirmBody"></p>
+      <div class="dialog-actions">
+        <button class="button button-quiet" value="cancel" type="submit">Cancel</button>
+        <button id="confirmOk" class="button button-primary" value="ok" type="submit">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+</body>
+</html>

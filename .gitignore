@@ -1,14 +1,14 @@
-frontend.zip
-extracted_frontend/
-
-# Organizer credentials and shared event data
+# Secrets
 .env
 .env.*
 !.env.example
-server-data.json
-server-data.json.tmp
 
-# Local browser/runtime files
-.env
-.env.*
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Local runtime files
 *.log
+test-results/
