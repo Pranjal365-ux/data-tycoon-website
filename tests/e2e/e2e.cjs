@@ -104,21 +104,20 @@ async function signIn(page, teamId, pin) {
     await page.waitForSelector(".article-grid");
     const steps = await page.$$eval(".desk-tab", nodes => nodes.map(node => node.textContent.replace(/\s+/g, " ").trim()));
     assert(steps.length === 4, "expected 4 steps");
-    assert(await page.isVisible(".next-bulletin"), "next step bulletin missing");
-    assert(await page.isVisible(".masthead") && await page.isVisible(".breaking-strip"), "newspaper masthead missing");
+        assert(await page.isVisible(".masthead") && await page.isVisible(".breaking-strip"), "newspaper masthead missing");
     await page.screenshot({ path: `${SHOTS}/02-industry.png`, fullPage: true });
   });
 
   await check("choosing an industry asks for confirmation and locks it", async () => {
     assert(await page.isDisabled('[data-action="confirm-industry"]'), "confirm should wait for a selection");
     await page.click('[data-action="select-industry"][data-industry="Food"]');
-    assert((await page.textContent(".selection-strip strong")).includes("FOOD"), "selection strip not updated");
+    assert((await page.textContent(".selection-strip strong")).includes("Food"), "selection strip not updated");
     await page.click('[data-action="confirm-industry"]');
     await page.waitForSelector("#confirmDialog[open]");
     await page.click("#confirmOk");
     await page.waitForSelector(".market-tape");
-    assert((await page.textContent("#utilityStatus")).includes("FOOD DESK"), "utility bar missing industry");
-    assert((await page.textContent("#wire")).includes("FLASH TIMER OFF"), "wire should show the timer setting");
+    assert((await page.textContent("#utilityStatus")).includes("Food"), "utility bar missing industry");
+    assert((await page.textContent("#statusText")).includes("Flash timer: Off"), "status strip should show the timer setting");
     await page.screenshot({ path: `${SHOTS}/03-round.png`, fullPage: true });
   });
 
@@ -133,8 +132,8 @@ async function signIn(page, teamId, pin) {
     await page.waitForFunction(() => document.querySelectorAll("#flashPages canvas").length === 6, null, { timeout: 15000 });
     const watermark = await page.$eval("#flashPages .flash-page", el => getComputedStyle(el, "::after").backgroundImage);
     assert(watermark.startsWith("url("), "watermark missing on pages");
-    assert((await page.textContent("#flashTimer")).trim() === "TIMER OFF", "timer off label missing");
-    assert((await page.textContent("#flashTimerNotice")).includes("TIMER OFF"), "timer off notice missing");
+    assert((await page.textContent("#flashTimer")).trim() === "No timer", "timer off label missing");
+    assert((await page.textContent("#flashTimerNotice")).includes("Close the flash when"), "timer off notice missing");
     assert(await page.isVisible("#flashClose"), "close button should show when the timer is off");
     assert(await page.evaluate(() => document.querySelector("#appRoot").inert), "app behind flash should be inert");
     await page.screenshot({ path: `${SHOTS}/04-flash.png` });
@@ -226,12 +225,12 @@ async function signIn(page, teamId, pin) {
     await page.keyboard.press("ArrowUp");
     assert((await inputs[0].inputValue()) === "3000", `arrow keys gave ${await inputs[0].inputValue()}`);
     await inputs[0].fill("500");
-    assert((await page.textContent("#allocMessage")).includes("AT LEAST"), "minimum not flagged");
+    assert((await page.textContent("#allocMessage")).includes("at least"), "minimum not flagged");
     for (const input of inputs.slice(0, 9)) await input.fill("100000");
     await inputs[9].fill("1000");
     await page.click('[data-action="fill-rest"][data-index="9"]');
     assert((await inputs[9].inputValue()) === "100000", `+ REST gave ${await inputs[9].inputValue()}`);
-    assert((await page.textContent("#allocMessage")).includes("ALLOCATIONS VALID"), "should be ready");
+    assert((await page.textContent("#allocMessage")).includes("Ready to submit"), "should be ready");
     await page.screenshot({ path: `${SHOTS}/07-allocation.png`, fullPage: true });
     await page.click("#submitRound");
     await page.click("#confirmOk");
@@ -267,7 +266,7 @@ async function signIn(page, teamId, pin) {
     await page.waitForSelector("#flash:not([hidden])");
     assert(await page.isHidden("#flashClose"), "close should be hidden while locked");
     assert(/^0[45]:\d\d$/.test((await page.textContent("#flashTimer")).trim()), `countdown missing: ${await page.textContent("#flashTimer")}`);
-    assert((await page.textContent("#flashTimerNotice")).includes("SCREEN LOCKED"), "lock notice missing");
+    assert((await page.textContent("#flashTimerNotice")).includes("closes by itself"), "lock notice missing");
   });
 
   await check("reloading during a locked flash reopens it", async () => {
@@ -286,7 +285,8 @@ async function signIn(page, teamId, pin) {
   await check("leaderboard highlights the team", async () => {
     await page.click('.desk-tab[data-view="leaderboard"]');
     await page.waitForSelector(".leaderboard-box tr.me");
-    assert((await page.textContent(".leaderboard-box tr.me")).includes("(YOU)"), "you marker missing");
+    assert((await page.textContent(".leaderboard-box tr.me")).includes("You"), "you marker missing");
+    assert(await page.isVisible(".next-bulletin"), "next step bulletin should point back to the round from the leaderboard");
     await page.screenshot({ path: `${SHOTS}/09-leaderboard.png`, fullPage: true });
   });
 
@@ -295,7 +295,7 @@ async function signIn(page, teamId, pin) {
     const phone = await other.newPage();
     await signIn(phone, team.toUpperCase(), "1234");
     await phone.waitForSelector(".market-tape");
-    assert((await phone.textContent(".section-heading h2")).includes("ROUND 2"), "second device sees wrong round");
+    assert((await phone.textContent(".section-heading h2")).includes("Round 2"), "second device sees wrong round");
     await phone.screenshot({ path: `${SHOTS}/10-mobile-round.png`, fullPage: true });
     await phone.click('.desk-tab[data-view="results"]');
     await phone.screenshot({ path: `${SHOTS}/11-mobile-results.png`, fullPage: true });

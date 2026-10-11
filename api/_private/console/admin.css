@@ -39,3 +39,14 @@ h1,h2,p{margin-top:0}h1{font:700 clamp(30px,4vw,46px) "Playfair Display",serif;l
 .message.good { color: #23652c; }
 .message.bad { color: #8e211b; }
 @media (max-width: 700px) { .admin-filters { grid-template-columns: 1fr; } }
+
+/* Readability: raise the original 8-9px labels */
+body { font-size: 15px; }
+.eyebrow, .stat-card span, .team-filter-bar label, th, .activity-time, .connection-state, .brand span { font-size: 12px !important; letter-spacing: 0.06em; }
+.stat-card strong { font-size: 30px; }
+td { font-size: 14px; }
+.activity-kind { font-size: 13px; }
+.activity-detail, .muted, .integrity-note, .footer-note { font-size: 14px; line-height: 1.6; }
+.money-form input { font-size: 15px; }
+.money-form button, .reset-pin, .button-secondary { font-size: 12px; }
+.flash-timer-action strong { font-size: 13px; }

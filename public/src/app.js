@@ -121,7 +121,7 @@ function setConnection(ok) {
   const text = $("#connectionText");
   if (!el || !text) return;
   el.classList.toggle("offline", !ok);
-  text.textContent = ok ? "LIVE" : "RECONNECTING…";
+  text.textContent = ok ? "Live" : "Reconnecting…";
 }
 
 function reportActivity(kind, detail) {
@@ -246,7 +246,7 @@ function render() {
   const signedIn = Boolean(team);
   $("#signOut").hidden = !signedIn;
   renderUtility();
-  renderWire();
+  renderStatusStrip();
   const steps = $("#steps");
   steps.hidden = !signedIn;
   steps.innerHTML = signedIn ? renderSteps() : "";
@@ -270,35 +270,31 @@ function renderUtility() {
   const el = $("#utilityStatus");
   if (!team) {
     el.className = "utility-status";
-    el.textContent = "LIVE SIMULATION DESK · VOL. 01";
+    el.textContent = "";
     return;
   }
   el.className = `utility-status ${ui.online ? "" : "offline"}`;
-  el.innerHTML = `<span class="live-dot" aria-hidden="true"></span><span id="connectionText">${ui.online ? "LIVE" : "RECONNECTING…"}</span><span>· ${esc(team.teamId.toUpperCase())}${team.industry ? ` · ${esc(team.industry.toUpperCase())} DESK` : ""}</span>`;
+  el.innerHTML = `<span class="live-dot" aria-hidden="true"></span><span id="connectionText">${ui.online ? "Live" : "Reconnecting…"}</span><span class="utility-team">${esc(team.teamId)}${team.industry ? ` · ${esc(team.industry)}` : ""}</span>`;
 }
 
-function renderWire() {
-  const wire = $("#wire");
+function renderStatusStrip() {
+  const strip = $("#statusStrip");
   if (!team) {
-    wire.textContent = "MARKETS MOVE · NEWS SPREADS · DECISIONS COMPOUND";
+    strip.hidden = true;
     return;
   }
-  const next = {
-    industry: "NEXT: CHOOSE YOUR INDUSTRY DESK",
-    flash: `NEXT: READ THE ROUND ${team.round} FLASH`,
-    dataset: `NEXT: DOWNLOAD THE ROUND ${team.round} DATASET`,
-    invest: `NEXT: INVEST ${money(team.budget)} AND SUBMIT`,
-    waiting: `ROUND ${team.round} SUBMITTED · ROUND ${team.round + 1} OPENS SOON`,
-    "next-open": `ROUND ${team.round + 1} IS OPEN`,
-    finished: team.isEliminated ? "YOUR TEAM IS OUT OF THE GAME" : "ALL FOUR ROUNDS COMPLETE"
-  }[stage()];
-  const timer = team.settings.flashTimer.enabled ? "FLASH TIMER ON · 5 MIN" : "FLASH TIMER OFF";
-  const wait = team.settings.roundWait.enabled ? "30-MIN ROUND WAIT ON" : "ROUND WAIT OFF";
-  wire.textContent = [team.industry ? `ROUND ${team.round} OF 0${team.rounds}` : "", next, timer, wait].filter(Boolean).join(" · ");
+  strip.hidden = false;
+  const timer = team.settings.flashTimer.enabled ? "On (5 minutes)" : "Off";
+  const wait = team.settings.roundWait.enabled ? "On (30 minutes)" : "Off";
+  $("#statusText").innerHTML = [
+    team.industry ? `<span>Round <b>${team.round} of ${team.rounds}</b></span>` : "",
+    `<span>Flash timer: <b>${timer}</b></span>`,
+    `<span>Wait between rounds: <b>${wait}</b></span>`
+  ].filter(Boolean).join("");
 }
 
 function renderLoading() {
-  return `<p class="press-loading">RECONNECTING TO YOUR TEAM…</p>`;
+  return `<p class="press-loading">Reconnecting to your team…</p>`;
 }
 
 function deskTab({ view, number, title, detail, state, disabledReason }) {
@@ -313,37 +309,42 @@ function deskTab({ view, number, title, detail, state, disabledReason }) {
 function renderSteps() {
   const s = stage();
   const roundDetail = {
-    flash: "Read the flash", dataset: "Download the dataset", invest: "Invest your budget",
-    waiting: "Round submitted", "next-open": "Next round open", finished: "All rounds done"
+    flash: "Next: read the flash", dataset: "Next: get the data", invest: "Next: invest",
+    waiting: "Submitted", "next-open": "Next round is open", finished: "All rounds done"
   }[s] || "";
   const latest = team.history.at(-1);
   return `<div class="desk-tabs-inner">
-    ${deskTab({ view: "industry", number: 1, title: "01 · Industry", detail: team.industry ? `${team.industry} (locked)` : "Choose your desk", state: team.industry ? "done" : "todo" })}
-    ${deskTab({ view: "round", number: 2, title: `02 · Round ${team.round} of 4`, detail: roundDetail, state: team.finished ? "done" : "todo", disabledReason: team.industry ? "" : "Choose an industry first" })}
-    ${deskTab({ view: "results", number: 3, title: "03 · Results", detail: latest ? `Round ${latest.round}: ${money(latest.payout)}` : "", state: "todo", disabledReason: latest ? "" : "Submit a round first" })}
-    ${deskTab({ view: "leaderboard", number: 4, title: "🏆 Leaderboard", detail: "Live rankings", state: "todo" })}
+    ${deskTab({ view: "industry", number: 1, title: "Industry", detail: team.industry ? team.industry : "Choose one", state: team.industry ? "done" : "todo" })}
+    ${deskTab({ view: "round", number: 2, title: `Round ${team.round} of 4`, detail: roundDetail, state: team.finished ? "done" : "todo", disabledReason: team.industry ? "" : "Choose an industry first" })}
+    ${deskTab({ view: "results", number: 3, title: "Results", detail: latest ? `Round ${latest.round}: ${money(latest.payout)}` : "", state: "todo", disabledReason: latest ? "" : "After your first round" })}
+    ${deskTab({ view: "leaderboard", number: 4, title: "Leaderboard", detail: "Live rankings", state: "todo" })}
   </div>`;
 }
 
 function renderNextStep() {
   const s = stage();
   const r = team.round;
+  // Only point somewhere else: if this page already shows the next action, skip the bulletin.
+  const shownHere = (ui.view === "industry" && s === "industry")
+    || (ui.view === "round" && ["flash", "dataset", "invest"].includes(s))
+    || (ui.view === "results" && ["waiting", "next-open", "finished"].includes(s));
+  if (shownHere) return "";
   const items = {
-    industry: ["Choose your industry desk", "Pick one of the five industries below, then confirm it. It stays locked for all four rounds.", null],
-    flash: [`Read the Round ${r} flash`, "Open the storyline flash and read it with your team. The dataset unlocks when you finish.", ["OPEN FLASH", "open-flash"]],
-    dataset: [`Download the Round ${r} dataset`, "Use the data to decide where to invest.", ["DOWNLOAD DATASET", "download-dataset"]],
-    invest: [`Invest ${money(team.budget)} and submit`, `Split the full budget across the ten parameters, at least ${money(team.minAllocation)} each, then lock it in.`, ui.view === "round" ? ["GO TO THE DESK", "scroll-to-allocation"] : [`GO TO ROUND ${r}`, "nav", "round"]],
-    waiting: [`Round ${r} submitted`, `Round ${r + 1} opens in <b data-countdown="wait">${formatDuration(waitRemaining())}</b>. This page updates on its own.`, ui.view === "results" ? null : ["VIEW RESULTS", "nav", "results"]],
-    "next-open": [`Round ${r + 1} is open`, "Start the next round when your team is ready.", [`PROCEED TO ROUND ${r + 1} ➔`, "advance"]],
-    finished: [team.isEliminated ? "Your team is out of the game" : "All four rounds complete", "See where your team finished.", ui.view === "leaderboard" ? null : ["🏆 VIEW LEADERBOARD", "nav", "leaderboard"]]
+    industry: ["Choose your industry", "Pick one of the five industries below and confirm it. You keep it for all four rounds.", null],
+    flash: [`Read the Round ${r} news flash`, "Read it with your team. The data file unlocks when you finish.", ["Open the flash", "open-flash"]],
+    dataset: [`Download the Round ${r} data`, "Use it to decide where to invest.", ["Download data", "download-dataset"]],
+    invest: [`Invest ${money(team.budget)}`, `Split it across the ten areas below (at least ${money(team.minAllocation)} each), then submit.`, ui.view === "round" ? ["Go to the table", "scroll-to-allocation"] : [`Go to Round ${r}`, "nav", "round"]],
+    waiting: [`Round ${r} submitted`, `Round ${r + 1} opens in <b data-countdown="wait">${formatDuration(waitRemaining())}</b>. This page updates on its own.`, ui.view === "results" ? null : ["See results", "nav", "results"]],
+    "next-open": [`Round ${r + 1} is open`, "Start whenever your team is ready.", [`Start Round ${r + 1}`, "advance"]],
+    finished: [team.isEliminated ? "Your team is out of the game" : "You've finished all four rounds", "See where your team ranks.", ui.view === "leaderboard" ? null : ["See leaderboard", "nav", "leaderboard"]]
   }[s];
   if (!items) return "";
   const [title, body, action] = items;
   const button = action ? `<div class="next-bulletin-action"><button type="button" data-action="${action[1]}" ${action[2] ? `data-view="${action[2]}"` : ""}>${esc(action[0])}</button></div>` : "";
-  return `<section class="next-bulletin" aria-live="polite"><span class="next-bulletin-label">NEXT STEP</span><div class="next-bulletin-body"><h3>${esc(title)}</h3><p>${body}</p></div>${button}</section>`;
+  return `<section class="next-bulletin" aria-live="polite"><span class="next-bulletin-label">Next step</span><div class="next-bulletin-body"><h3>${esc(title)}</h3><p>${body}</p></div>${button}</section>`;
 }
 
-function shellHeading(eyebrow, title) {
+function pageHeading(eyebrow, title) {
   return `<div class="section-heading"><span class="eyebrow">${eyebrow}</span><h2>${title}</h2></div>`;
 }
 
@@ -355,30 +356,34 @@ function lastTeamName() {
 function renderLogin() {
   return `<section class="front-page">
     <div class="front-copy">
-      <div class="breaking-banner">TECHTATVA '26 · DATA TYCOON</div>
-      <h2>WELCOME,<br><em>ANALYSTS.</em></h2>
-      <p class="lead">Read each industry dataset, then allocate the full round budget across its ten parameters.</p>
+      <div class="breaking-banner">TechTatva '26 · Data Tycoon</div>
+      <h2>Welcome,<br><em>analysts.</em></h2>
+      <p class="lead">Read the news, study the data, and invest your company's money over four rounds. The richest team wins.</p>
       <div class="front-note">
-        <span class="article-label">EVENT RULES</span>
-        <p>Choose one industry for four rounds. Start with <b>₹10,00,000</b>; your balance carries forward, with a ₹2,50,000 bonus before Round 2 and Round 3. Read each round's flash, download the dataset, and invest the full round budget across ten parameters, with a ₹1,000 minimum per parameter.</p>
-        <p class="monitoring-notice">While a flash is open, the organizers are alerted to screenshot shortcuts and to leaving the tab or window. Some operating system screenshot methods cannot be detected by a website.</p>
+        <span class="article-label">How it works</span>
+        <ul class="rules-list">
+          <li>Pick <b>one industry</b> for the whole game.</li>
+          <li>Start with <b>₹10,00,000</b>. Whatever you end a round with carries into the next, plus a <b>₹2,50,000 bonus</b> before Rounds 2 and 3.</li>
+          <li>Each round: <b>read the news flash</b>, <b>download the data</b>, then <b>invest all of your money</b> across ten areas (at least ₹1,000 each).</li>
+        </ul>
+        <p class="monitoring-notice">While a news flash is open, screenshots and switching away from the tab are reported to the organizers.</p>
       </div>
     </div>
     <form class="login-form" id="loginForm" autocomplete="on">
-      <div class="article-label">NEWSROOM LOG IN</div>
-      <label for="teamId">Team ID / Name</label>
-      <input class="text-input" id="teamId" name="teamId" required minlength="2" maxlength="40" autocomplete="username" placeholder="Enter your Team Name (e.g. Team Alpha)" value="${esc(session?.teamId || lastTeamName())}">
-      <label for="pin">Access PIN</label>
-      <input class="text-input" id="pin" name="pin" type="password" required minlength="4" maxlength="64" autocomplete="current-password" placeholder="Create a PIN or enter your team PIN">
-      <small>First sign-in sets the team PIN. Use the same team name and PIN to sign back in.</small>
-      <small>One laptop per team: signing in on another device signs this one out. Your saved round resumes after sign-in.</small>
+      <div class="article-label">Team sign in</div>
+      <label for="teamId">Team name</label>
+      <input class="text-input" id="teamId" name="teamId" required minlength="2" maxlength="40" autocomplete="username" placeholder="e.g. Team Alpha" value="${esc(session?.teamId || lastTeamName())}">
+      <label for="pin">Team PIN</label>
+      <input class="text-input" id="pin" name="pin" type="password" required minlength="4" maxlength="64" autocomplete="current-password" placeholder="4 or more characters">
+      <small>New team? Your first sign-in creates the team and sets this PIN.</small>
+      <small>One laptop per team. Signing in somewhere else signs this one out. Your progress is saved.</small>
       ${ui.loginError ? `<p class="form-error" role="alert">${esc(ui.loginError)}</p>` : ""}
-      <button type="submit">ENTER THE NEWSROOM</button>
+      <button type="submit">Sign in</button>
     </form>
   </section>`;
 }
 
-/* ── 2. Industry selection ── */
+/* ── 2. Industry ── */
 function renderIndustry() {
   const locked = Boolean(team.industry);
   const capacity = team.industryCapacity || [];
@@ -386,46 +391,41 @@ function renderIndustry() {
   const cards = locked
     ? [{ industry: team.industry, description: "Your team's industry for all four rounds.", remaining: null, capacity: 20 }]
     : capacity;
-  return `${shellHeading("STEP 1", "SELECT YOUR INDUSTRY DESK")}
-  <p class="intro-copy">Choose one industry for your company. Confirming your choice locks it for all four rounds. Each industry takes up to 20 teams.</p>
+  return `${pageHeading("Step 1", locked ? "Your industry" : "Choose your industry")}
+  <p class="intro-copy">${locked ? "Your industry is locked in for the whole game." : "Pick one industry, then confirm. You keep it for all four rounds. Each industry has room for 20 teams."}</p>
   <div class="selection-strip">
     <div>
-      <strong>${selected ? `SELECTED: ${esc(selected.toUpperCase())}` : "NO INDUSTRY SELECTED YET"}</strong>
-      <span>${locked ? "YOUR INDUSTRY IS LOCKED FOR ALL FOUR ROUNDS" : selected ? "CLICK CONFIRM TO OPEN YOUR DASHBOARD" : "CHOOSE AN INDUSTRY BELOW"}</span>
+      <strong>${selected ? `Selected: ${esc(selected)}` : "Nothing selected yet"}</strong>
+      <span>${locked ? "Locked for all four rounds" : selected ? "Press confirm to lock it in" : "Choose an industry below"}</span>
     </div>
     ${locked
-      ? `<button type="button" data-action="nav" data-view="round">GO TO ROUND ${team.round} DASHBOARD ➔</button>`
-      : `<button type="button" data-action="confirm-industry" ${selected ? "" : "disabled"}>CONFIRM &amp; PROCEED TO DASHBOARD ➔</button>`}
+      ? `<button type="button" data-action="nav" data-view="round">Go to Round ${team.round}</button>`
+      : `<button type="button" data-action="confirm-industry" ${selected ? "" : "disabled"}>Confirm ${selected ? esc(selected) : "industry"}</button>`}
   </div>
   <div class="article-grid">
     ${cards.map((item, index) => {
       const full = item.remaining !== null && item.remaining <= 0;
       const isSelected = selected === item.industry;
-      const seats = item.remaining === null ? "INDUSTRY LOCKED" : full ? "NO SEATS LEFT" : `${item.remaining} of ${item.capacity} seats remaining`;
+      const seats = item.remaining === null ? "Locked in" : full ? "Full" : `${item.remaining} of ${item.capacity} places left`;
       return `<article class="industry-card editorial-choice ${isSelected ? "selected" : ""}">
-        <div class="choice-topline"><span class="choice-number">0${locked ? 1 : index + 1}</span><span class="article-label">INDUSTRY DESK</span></div>
-        <h3>${esc(item.industry)}</h3>
+        <div class="choice-topline"><span class="choice-number">0${locked ? 1 : index + 1}</span><h3>${esc(item.industry)}</h3></div>
         <p>${esc(item.description)}</p>
-        <p class="industry-seats" aria-live="polite">${seats}</p>
-        ${locked ? "" : `<button type="button" class="choice-button ${isSelected ? "ghost" : ""}" data-action="select-industry" data-industry="${esc(item.industry)}" ${full ? "disabled" : ""}>${isSelected ? "✓ SELECTED" : full ? "NO SEATS LEFT" : "CHOOSE THIS INDUSTRY"}</button>`}
+        <p class="industry-seats ${full ? "full" : ""}" aria-live="polite">${seats}</p>
+        ${locked ? "" : `<button type="button" class="choice-button ${isSelected ? "ghost" : ""}" data-action="select-industry" data-industry="${esc(item.industry)}" ${full ? "disabled" : ""}>${isSelected ? "✓ Selected" : full ? "Full" : `Choose ${esc(item.industry)}`}</button>`}
       </article>`;
     }).join("")}
   </div>`;
 }
 
-/* ── 3. Round dashboard ── */
-function stepTag(done, current, label) {
-  return `<span class="step-tag ${done ? "done" : current ? "current" : ""}">${label} · ${done ? "COMPLETE ✓" : current ? "DO THIS NOW" : "LOCKED"}</span>`;
-}
-
-function companyValueChart() {
+/* ── 3. Round ── */
+function companyValueChart(title = "Your company's value") {
   const history = team.history || [];
   const points = [{ round: 0, value: history[0]?.budget || 1_000_000 }, ...history.map(item => ({ round: item.round, value: Math.max(0, item.payout) }))];
   const values = points.map(p => p.value);
   const mn = Math.min(...values), mx = Math.max(...values);
   const pad = Math.max((mx - mn) * 0.22, points[0].value * 0.012, 1);
   const lo = Math.max(0, mn - pad), hi = mx + pad;
-  const w = 760, h = 160, l = 48, r = 18, t = 18, b = 33;
+  const w = 760, h = 170, l = 30, r = 30, t = 26, b = 34;
   const x = i => l + i * (w - l - r) / Math.max(points.length - 1, 1);
   const y = v => h - b - (v - lo) / (hi - lo || 1) * (h - t - b);
   const coords = points.map((p, i) => `${x(i)},${y(p.value)}`);
@@ -435,22 +435,27 @@ function companyValueChart() {
   const base = h - b;
   return `<section class="company-chart-card ${trend}">
     <div class="chart-card-head">
-      <div><span class="article-label">VALUATION TRAJECTORY</span><h3>NET CAPITAL TREND</h3></div>
+      <div><span class="article-label">After each round</span><h3>${title}</h3></div>
       <div class="chart-current">
-        <small>${points.length > 1 ? `ROUND ${String(points.at(-1).round).padStart(2, "0")}` : "STARTING CAPITAL"}</small>
+        <small>${points.length > 1 ? `After Round ${points.at(-1).round}` : "Starting money"}</small>
         <b>${money(points.at(-1).value)}</b>
-        <span class="trend-${trend}">${change > 0 ? "▲ +" : change < 0 ? "▼ " : "± "}${Math.abs(pct).toFixed(1)}%</span>
+        ${points.length > 1 ? `<span class="trend-${trend}">${change > 0 ? "▲ +" : change < 0 ? "▼ " : "± "}${Math.abs(pct).toFixed(1)}% vs last round</span>` : ""}
       </div>
     </div>
     <svg class="value-chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="Company value after each round">
-      <line class="chart-rule" x1="${l}" y1="${t}" x2="${w}" y2="${t}"/>
-      <line class="chart-rule" x1="${l}" y1="${(t + base) / 2}" x2="${w}" y2="${(t + base) / 2}"/>
-      <line class="chart-rule" x1="${l}" y1="${base}" x2="${w}" y2="${base}"/>
+      <line class="chart-rule" x1="${l}" y1="${t}" x2="${w - r}" y2="${t}"/>
+      <line class="chart-rule" x1="${l}" y1="${base}" x2="${w - r}" y2="${base}"/>
       <polygon class="value-area" points="${x(0)},${base} ${coords.join(" ")} ${x(points.length - 1)},${base}"/>
       <polyline class="value-line" points="${coords.join(" ")}"/>
-      ${points.map((p, i) => `<circle class="value-dot" cx="${x(i)}" cy="${y(p.value)}" r="4"/><text class="chart-axis" x="${x(i)}" y="${h - 8}" text-anchor="middle">${i === 0 ? "START" : `RD ${p.round}`}</text>`).join("")}
+      ${points.map((p, i) => `<circle class="value-dot" cx="${x(i)}" cy="${y(p.value)}" r="5"/><text class="chart-value" x="${x(i)}" y="${y(p.value) - 11}" text-anchor="${i === 0 ? "start" : i === points.length - 1 ? "end" : "middle"}">${(p.value / 100000).toFixed(2)}L</text><text class="chart-axis" x="${x(i)}" y="${h - 8}" text-anchor="${i === 0 ? "start" : i === points.length - 1 ? "end" : "middle"}">${i === 0 ? "Start" : `Round ${p.round}`}</text>`).join("")}
     </svg>
   </section>`;
+}
+
+function stepHeader(number, title, done, current) {
+  const state = done ? "done" : current ? "current" : "locked";
+  const label = done ? "Done" : current ? "Do this now" : "Locked";
+  return `<div class="step-head ${state}"><span class="step-badge">${done ? "✓" : number}</span><div class="step-title"><span class="step-kicker">Step ${number} of 3</span><h3>${title}</h3></div><span class="step-state">${label}</span></div>`;
 }
 
 function renderRound() {
@@ -462,74 +467,55 @@ function renderRound() {
   const timerOn = team.settings.flashTimer.enabled;
   const waitOn = team.settings.roundWait.enabled;
   const fileType = team.datasetName.split(".").pop().toUpperCase();
-  const step = (done, current) => (done ? "done" : current ? "current" : "");
-  const head = `<div class="live-label">LIVE MARKET DASHBOARD · ROUND ${String(team.round).padStart(2, "0")} OF 04</div>
-  ${shellHeading(`${esc(team.industry.toUpperCase())} INDUSTRY`, `ROUND ${team.round} DASHBOARD`)}
+  const budgetNote = team.bonus
+    ? `${money(team.budget - team.bonus)} + ${money(team.bonus)} bonus`
+    : team.round === 1 ? "Same for every team" : "Carried from last round";
+  const head = `${pageHeading(`${esc(team.industry)} · Round ${team.round} of 4`, `Round ${team.round}`)}
   <div class="market-tape">
-    <div><small>ROUND BUDGET</small><b class="tape-budget">${money(team.budget)}</b></div>
-    <div><small>LEADERBOARD RANK</small><b class="tape-rank">${rank ? `#${rank.rank} <span>of ${rank.total} teams</span>` : "…"}</b></div>
-    <div><small>ROUND PROGRESS</small><b>ROUND ${team.round} / 4</b></div>
-    <div><small>SELECTED INDUSTRY</small><b>${esc(team.industry)}</b></div>
+    <div><small>Money to invest</small><b class="tape-budget">${money(team.budget)}</b><em>${budgetNote}</em></div>
+    <div><small>Your rank</small><b class="tape-rank">${rank ? `#${rank.rank}` : "…"}</b><em>${rank ? `of ${rank.total} team${rank.total === 1 ? "" : "s"}` : "Loading"}</em></div>
+    <div><small>Flash timer</small><b>${timerOn ? "On" : "Off"}</b><em>${timerOn ? "Locked open for 5 minutes" : "Close it when you're done"}</em></div>
+    <div><small>Wait between rounds</small><b>${waitOn ? "30 minutes" : "None"}</b><em>${waitOn ? "After you submit" : "Next round opens at once"}</em></div>
   </div>`;
   if (team.finished) {
-    return `${head}<section class="analysis-card notice-card"><span class="article-label">${team.isEliminated ? "ROUND DISQUALIFICATION" : "FINAL EDITION"}</span><h3>${team.isEliminated ? "YOUR TEAM IS ELIMINATED" : "ALL FOUR ROUNDS COMPLETE"}</h3><p>${team.isEliminated ? "The zero-return parameter received more than 80% of the round budget. Your team cannot submit more rounds." : `Your final balance is ${money(team.companyValue)}.`}</p><button type="button" data-action="nav" data-view="leaderboard">🏆 VIEW LEADERBOARD</button></section>${companyValueChart()}`;
+    return `${head}<section class="analysis-card notice-card"><h3>${team.isEliminated ? "Your team is out of the game" : "All four rounds complete"}</h3><p>${team.isEliminated ? "More than 80% of a round's money went into an area that returns nothing, so your team was disqualified." : `You finished with ${money(team.companyValue)}.`}</p><button type="button" data-action="nav" data-view="leaderboard">See leaderboard</button></section>${team.history.length ? companyValueChart() : ""}`;
   }
-  const budgetLine = team.bonus
-    ? `<p class="bonus-line">Previous round balance: ${money(team.budget - team.bonus)} + Round ${team.round} bonus: ${money(team.bonus)}.</p>`
-    : team.round > 1 ? `<p class="bonus-line">Carried forward from the previous round: ${money(team.budget)}.</p>` : "";
   const tooSmall = team.budget < team.minAllocation * team.parameters.length;
   return `${head}
-  <section class="analysis-card round-instructions desk-section">
-    <span class="article-label">ROUND INSTRUCTIONS</span><h3>HOW TO PLAY THIS ROUND</h3>
-    ${budgetLine}
-    <ol>
-      <li class="${step(flashDone, s === "flash")}">Read the round flash${timerOn ? " (the flash stays locked open for five minutes)" : " (close it when your team has finished reading)"}.</li>
-      <li class="${step(dataDone, s === "dataset")}">Download the official dataset for this industry and round.</li>
-      <li class="${step(team.submitted, s === "invest")}">Allocate exactly ${money(team.budget)} across the ten parameters, with at least ${money(team.minAllocation)} in each.</li>
-      <li class="${step(team.submitted, false)}">Lock in your investments to see your payout${team.round < 4 ? waitOn ? ". The next round opens 30 minutes after you submit." : ". The next round opens as soon as you submit." : "."}</li>
-    </ol>
-    <div class="settings-line"><span>FLASH TIMER: <b>${timerOn ? "ON · 5 MINUTES" : "OFF · CLOSE WHEN READY"}</b></span><span>ROUND WAIT: <b>${waitOn ? "ON · 30 MINUTES" : "OFF"}</b></span><span>SET BY THE ORGANIZERS</span></div>
-  </section>
   <section class="flash-callout desk-section ${flashDone ? "done" : ""}">
-    ${stepTag(flashDone, s === "flash", "STEP 1")}
-    <span class="article-label" style="display:block">MANDATORY STORYLINE FLASH · ROUND ${team.round}</span>
-    <h2>ROUND ${team.round} FLASH</h2>
-    <p>${flashDone ? "You have read this round's flash. You can open it again at any time before you submit." : timerOn ? "The flash stays locked open for five minutes, then closes on its own and unlocks the dataset." : "Read the flash with your team, then close it to unlock the dataset."} Screenshots and leaving the tab are reported to the organizers.</p>
-    <button type="button" class="${flashDone ? "ghost" : "primary-red"}" data-action="open-flash" ${team.submitted ? "disabled" : ""}>${flashDone ? "READ THE FLASH AGAIN" : "OPEN FLASH"}</button>
+    ${stepHeader(1, "Read the news flash", flashDone, s === "flash")}
+    <p>${flashDone ? "Done. You can open it again any time before you submit." : timerOn ? "It stays open for 5 minutes, then closes by itself and unlocks the data." : "Read it with your team, then close it to unlock the data."}</p>
+    <button type="button" class="${flashDone ? "ghost" : "primary-red"}" data-action="open-flash" ${team.submitted ? "disabled" : ""}>${flashDone ? "Read it again" : "Open the flash"}</button>
   </section>
   <section class="analysis-card dataset-callout desk-section ${flashDone ? "" : "locked"}">
-    ${stepTag(dataDone, s === "dataset", "STEP 2")}
-    <span class="article-label" style="display:block">ROUND ${team.round} DATASET FILE</span>
-    <h3>${esc(team.industry.toUpperCase())} DATASET</h3>
-    <p>Download the supplied ${fileType} dataset for this industry and round.</p>
-    <button type="button" data-action="download-dataset" ${flashDone ? "" : "disabled"}>${dataDone ? "DATASET DOWNLOADED · DOWNLOAD AGAIN" : `DOWNLOAD ROUND ${team.round} DATASET (${fileType})`}</button>
-    ${flashDone ? "" : `<p class="lock-note">Complete the storyline flash to unlock the dataset.</p>`}
+    ${stepHeader(2, "Download the data", dataDone, s === "dataset")}
+    <p>${flashDone ? `${esc(team.industry)} data for Round ${team.round} (${fileType} file).` : "Unlocks after you read the flash."}</p>
+    <button type="button" class="${dataDone ? "ghost" : ""}" data-action="download-dataset" ${flashDone ? "" : "disabled"}>${dataDone ? "Download again" : `Download ${fileType}`}</button>
   </section>
-  ${companyValueChart()}
   ${team.submitted ? "" : tooSmall
-    ? `<section class="analysis-card notice-card"><span class="article-label">INVESTMENT ALLOCATION DESK</span><h3>YOUR BUDGET IS TOO SMALL TO INVEST</h3><p>Every parameter needs at least ${money(team.minAllocation)}, so a round needs ${money(team.minAllocation * team.parameters.length)}. Please speak to an organizer.</p></section>`
-    : renderAllocation(canInvest, s === "invest")}`;
+    ? `<section class="analysis-card notice-card"><h3>Not enough money to invest</h3><p>Each of the ten areas needs at least ${money(team.minAllocation)}, so a round needs ${money(team.minAllocation * team.parameters.length)}. Please speak to an organizer.</p></section>`
+    : renderAllocation(canInvest, s === "invest")}
+  ${team.history.length ? companyValueChart() : ""}`;
 }
 
 function renderAllocation(enabled, current) {
   const rows = team.parameters.map((name, index) => `<tr>
-    <td class="alloc-param"><strong>${esc(name)}</strong><small>${index < 5 ? "COMMON PARAMETER" : "INDUSTRY PARAMETER"}</small></td>
-    <td class="alloc-rule">Minimum ₹1,000 <br><span data-share="${index}">0.0%</span> of budget</td>
-    <td class="allocation-input-cell align-right"><span class="rupee">₹</span><input type="number" inputmode="numeric" min="${team.minAllocation}" step="1000" data-param="${esc(name)}" aria-label="Amount for ${esc(name)}" placeholder="0" ${enabled ? "" : "disabled"}><button type="button" class="fill-rest" data-action="fill-rest" data-index="${index}" title="Put the amount still left to invest into this parameter" ${enabled ? "" : "disabled"}>+ REST</button></td>
+    <td class="alloc-param"><strong>${esc(name)}</strong><small>${index < 5 ? "All industries" : `${esc(team.industry)} only`}</small></td>
+    <td class="alloc-rule"><span data-share="${index}">0.0%</span> of your money</td>
+    <td class="allocation-input-cell align-right"><span class="rupee">₹</span><input type="number" inputmode="numeric" min="${team.minAllocation}" step="1000" data-param="${esc(name)}" aria-label="Amount for ${esc(name)}" placeholder="0" ${enabled ? "" : "disabled"}><button type="button" class="fill-rest" data-action="fill-rest" data-index="${index}" title="Add everything that is still left to invest to this area" ${enabled ? "" : "disabled"}>+ Rest</button></td>
   </tr>`).join("");
   return `<section class="allocation-section desk-section" id="allocation">
-    ${stepTag(team.submitted, current, "STEP 3")}
-    <div class="article-label">INVESTMENT ALLOCATION DESK</div><h2>INVEST ACROSS THE TEN PARAMETERS</h2>
-    <p class="allocation-intro">Invest exactly ${money(team.budget)} in total. Each parameter must receive at least ₹1,000. Allocation bands adjust returns: concentrating heavily in the wrong parameter can create a direct loss, and putting more than 80% into a zero-return parameter disqualifies the round.</p>
-    <div class="alloc-tools"><span class="hint">USE THE ARROWS OR ↑ / ↓ KEYS TO CHANGE AMOUNTS IN ₹1,000 STEPS · “+ REST” ADDS WHATEVER IS STILL LEFT</span><button type="button" class="ghost" data-action="clear-allocation" ${enabled ? "" : "disabled"}>CLEAR ALL</button></div>
-    <div class="table-scroll"><table class="alloc-table"><thead><tr><th>Industry parameter</th><th>Rule</th><th class="align-right">Investment amount</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${stepHeader(3, `Invest ${money(team.budget)}`, team.submitted, current)}
+    <p class="allocation-intro">Put money into all ten areas, at least ${money(team.minAllocation)} each, so the total is exactly ${money(team.budget)}. Some areas pay off more than others this round, and piling too much into one area can backfire.</p>
+    <div class="alloc-tools"><span class="hint">Arrows change amounts by ₹1,000. “+ Rest” adds whatever is left.</span><button type="button" class="ghost" data-action="clear-allocation" ${enabled ? "" : "disabled"}>Clear all</button></div>
+    <div class="table-scroll"><table class="alloc-table"><thead><tr><th>Area</th><th>Share</th><th class="align-right">Amount</th></tr></thead><tbody>${rows}</tbody></table></div>
     <div class="alloc-totals">
-      <div><span>REQUIRED ROUND BUDGET:</span><b>${money(team.budget)}</b></div>
-      <div><span>TOTAL INVESTED:</span><b id="allocTotal">₹0</b></div>
-      <div><span>REMAINING TO ALLOCATE:</span><b id="allocRemaining">${money(team.budget)}</b></div>
+      <div><span>Money to invest</span><b>${money(team.budget)}</b></div>
+      <div><span>Invested so far</span><b id="allocTotal">₹0</b></div>
+      <div><span>Left to invest</span><b id="allocRemaining">${money(team.budget)}</b></div>
     </div>
-    <div id="allocMessage" class="total invalid">${enabled ? "" : !team.flashCompleted ? "🔒 COMPLETE THE STORYLINE FLASH TO CONTINUE" : `🔒 DOWNLOAD THE ROUND ${team.round} DATASET TO UNLOCK INVESTMENTS`}</div>
-    <button type="button" id="submitRound" class="submit-round" data-action="submit-round" disabled>LOCK &amp; SUBMIT ROUND ${team.round}</button>
+    <div id="allocMessage" class="total invalid">${enabled ? "" : !team.flashCompleted ? "🔒 Read the news flash first (Step 1)." : `🔒 Download the Round ${team.round} data first (Step 2).`}</div>
+    <button type="button" id="submitRound" class="submit-round" data-action="submit-round" disabled>Submit Round ${team.round}</button>
   </section>`;
 }
 
@@ -537,71 +523,70 @@ function renderAllocation(enabled, current) {
 function resultRows(result) {
   return Object.entries(result.allocations || {}).map(([name, amount]) => {
     const returned = Number(result.returns?.[name] || 0);
-    return `<tr><td><b>${esc(name)}</b></td><td>${((Number(amount) / (result.budget || 1)) * 100).toFixed(2)}%</td><td>${money(amount)}</td><td class="${returned >= Number(amount) ? "returned-up" : "returned-down"}">${money(returned)}</td></tr>`;
+    return `<tr><td><b>${esc(name)}</b></td><td>${((Number(amount) / (result.budget || 1)) * 100).toFixed(1)}%</td><td>${money(amount)}</td><td class="${returned >= Number(amount) ? "returned-up" : "returned-down"}">${money(returned)}</td></tr>`;
   }).join("");
 }
 
 function resultTable(result) {
-  return `<div class="table-scroll"><table><thead><tr><th>Investment parameter</th><th>Allocation</th><th>Invested amount</th><th>Amount returned</th></tr></thead><tbody>${resultRows(result)}</tbody></table></div>`;
+  return `<div class="table-scroll"><table class="result-table"><thead><tr><th>Area</th><th>Share</th><th>Invested</th><th>Got back</th></tr></thead><tbody>${resultRows(result)}</tbody></table></div>`;
 }
 
 function renderResults() {
   const latest = team.history.at(-1);
   if (!latest) {
-    return `${shellHeading("RESULTS", "NO ROUND CLOSED YET")}<button type="button" data-action="nav" data-view="round">RETURN TO DASHBOARD ➔</button>`;
+    return `${pageHeading("Results", "No results yet")}<p class="intro-copy">Submit Round 1 to see how your investments did.</p><button type="button" data-action="nav" data-view="round">Go to Round 1</button>`;
   }
   const s = stage();
   const rank = myRank();
   let next = "";
   if (s === "finished") {
-    next = `<button type="button" class="final" data-action="nav" data-view="leaderboard">🏆 VIEW FINAL LEADERBOARD &amp; WINNERS ➔</button>`;
+    next = `<p class="round-wait-message">${team.isEliminated ? "Your team is out of the game." : "That was the final round."}</p><button type="button" class="final" data-action="nav" data-view="leaderboard">See the final leaderboard</button>`;
   } else if (s === "waiting") {
-    next = `<p class="round-wait-message" role="status">Next flash unlocks in <span data-countdown="wait">${formatDuration(waitRemaining())}</span>.</p>
-      <p class="wait-note">Stay on this page. The button unlocks on its own; no need to refresh.</p>
-      <button type="button" class="advance" disabled>NEXT FLASH LOCKED · WAIT FOR COUNTDOWN</button>`;
+    next = `<p class="round-wait-message" role="status">Round ${team.round + 1} opens in <span data-countdown="wait">${formatDuration(waitRemaining())}</span></p>
+      <p class="wait-note">Stay on this page. The button unlocks by itself, no need to refresh.</p>
+      <button type="button" class="advance" disabled>Waiting for Round ${team.round + 1}</button>`;
   } else if (s === "next-open") {
-    next = `<p class="round-wait-message" role="status">${team.settings.roundWait.enabled ? "The next flash is available now." : "The organizer has removed the 30-minute wait. The next flash is available now."}</p>
-      <button type="button" class="advance" data-action="advance">PROCEED TO ROUND ${team.round + 1} DASHBOARD ➔</button>`;
+    next = `<p class="round-wait-message" role="status">Round ${team.round + 1} is open.</p>
+      <button type="button" class="advance" data-action="advance">Start Round ${team.round + 1}</button>`;
   }
-  const older = team.history.slice(0, -1).reverse().map(item => `<details class="past-round"><summary><span>ROUND ${item.round} CLOSE · PAYOUT ${money(item.payout)}</span><span class="${item.netProfit >= 0 ? "returned-up" : "returned-down"}">${item.netProfit >= 0 ? "+" : ""}${money(item.netProfit)}</span></summary>${resultTable(item)}</details>`).join("");
-  return `${shellHeading(`ROUND ${String(latest.round).padStart(2, "0")} CLOSE`, latest.eliminated ? "TEAM ELIMINATED" : "INVESTMENT RESULTS")}
-  ${companyValueChart()}
+  const profit = latest.netProfit;
+  const older = team.history.slice(0, -1).reverse().map(item => `<details class="past-round"><summary><span>Round ${item.round} · got back ${money(item.payout)}</span><span class="${item.netProfit >= 0 ? "returned-up" : "returned-down"}">${item.netProfit >= 0 ? "+" : ""}${money(item.netProfit)}</span></summary>${resultTable(item)}</details>`).join("");
+  return `${pageHeading(`${esc(team.industry)} · Round ${latest.round}`, latest.eliminated ? "Disqualified" : `Round ${latest.round} results`)}
   <section class="results-card">
-    <div class="article-label">${esc(team.industry.toUpperCase())} PERFORMANCE REPORT</div>
-    <h2>ROUND ${latest.round} FINANCIAL CLOSE</h2>
     <div class="result-highlight">
-      <span>FINAL ROUND PAYOUT</span>
-      <strong>${money(latest.payout)}</strong>
-      <span class="${latest.netProfit >= 0 ? "profit-up" : "profit-down"}">NET PROFIT: ${latest.netProfit >= 0 ? "+" : ""}${money(latest.netProfit)}</span>
-      ${latest.bonus ? `<span style="margin-top:8px;font-weight:bold;color:var(--green)">PRE-ROUND TEAM BONUS ADDED TO ROUND ${latest.round} BUDGET: +${money(latest.bonus)}</span>` : ""}
-      ${latest.payout < 0 ? `<span style="margin-top:8px">BALANCES CANNOT GO BELOW ₹0, SO YOUR BALANCE IS NOW ₹0.</span>` : ""}
-      ${latest.eliminated ? `<span class="error" style="margin-top:8px">DISQUALIFIED: MORE THAN 80% OF THE BUDGET WENT INTO A ZERO-RETURN PARAMETER, SO THE PAYOUT IS ZERO.</span>` : ""}
-      <span style="margin-top:8px;font-weight:bold;color:var(--red)">CURRENT LEADERBOARD RANK: ${rank ? `#${rank.rank} of ${rank.total} teams` : "…"}</span>
+      <div class="result-figures">
+        <div><span>You got back</span><strong>${money(latest.payout)}</strong></div>
+        <div><span>Profit</span><strong class="${profit >= 0 ? "profit-up" : "profit-down"}">${profit >= 0 ? "+" : ""}${money(profit)}</strong></div>
+        <div><span>Your rank</span><strong>${rank ? `#${rank.rank}` : "…"}</strong><em>${rank ? `of ${rank.total} team${rank.total === 1 ? "" : "s"}` : ""}</em></div>
+      </div>
+      <p class="result-notes">You invested ${money(latest.budget)}${latest.bonus ? `, including the ${money(latest.bonus)} bonus` : ""}.${latest.payout < 0 ? " Balances can't go below ₹0, so you now have ₹0." : ""}</p>
+      ${latest.eliminated ? `<p class="form-error">More than 80% of the money went into an area that returns nothing, so this round pays nothing and your team is out of the game.</p>` : ""}
     </div>
-    ${resultTable(latest)}
     <div class="next-round-desk">${next}</div>
+    <h3 class="table-title">Where your money went</h3>
+    ${resultTable(latest)}
   </section>
-  ${older}`;
+  ${companyValueChart()}
+  ${older ? `<h3 class="table-title">Earlier rounds</h3>${older}` : ""}`;
 }
 
 /* ── 5. Leaderboard ── */
 function renderLeaderboard() {
   const rows = ui.leaderboard;
-  const body = !rows ? `<tr><td colspan="5" style="text-align:center">Loading rankings…</td></tr>`
-    : !rows.length ? `<tr><td colspan="5" style="text-align:center">No teams recorded yet.</td></tr>`
+  const body = !rows ? `<tr><td colspan="5" class="empty-cell">Loading rankings…</td></tr>`
+    : !rows.length ? `<tr><td colspan="5" class="empty-cell">No teams yet.</td></tr>`
     : rows.map((row, index) => {
       const me = team && row.teamId.toLowerCase() === team.teamId.toLowerCase();
-      const badge = index === 0 ? "🥇 1ST" : index === 1 ? "🥈 2ND" : index === 2 ? "🥉 3RD" : `#${index + 1}`;
-      return `<tr class="${me ? "me" : ""}"><td><b>${badge}</b></td><td><b>${esc(row.teamId)}</b>${me ? ' <span class="you">(YOU)</span>' : ""}</td><td>${esc(row.industry || "-")}</td><td>${row.isEliminated ? "Eliminated" : `Round ${row.round}`}</td><td class="balance">${money(row.companyValue)}</td></tr>`;
+      const badge = index === 0 ? "🥇 1st" : index === 1 ? "🥈 2nd" : index === 2 ? "🥉 3rd" : `#${index + 1}`;
+      return `<tr class="${me ? "me" : ""}"><td class="rank-cell"><b>${badge}</b></td><td><b>${esc(row.teamId)}</b>${me ? ' <span class="you">You</span>' : ""}</td><td>${esc(row.industry || "-")}</td><td>${row.isEliminated ? "Out" : `Round ${row.round}`}</td><td class="balance">${money(row.companyValue)}</td></tr>`;
     }).join("");
-  return `${shellHeading("TECHTATVA '26", "OFFICIAL LEADERBOARD")}
+  return `${pageHeading("TechTatva '26", "Leaderboard")}
   <div class="leaderboard-box">
-    <div class="table-scroll"><table><thead><tr><th>Rank</th><th>Team Name</th><th>Industry</th><th>Round Reached</th><th>Net Capital Balance</th></tr></thead><tbody>${body}</tbody></table></div>
+    <div class="table-scroll"><table><thead><tr><th>Rank</th><th>Team</th><th>Industry</th><th>Progress</th><th class="align-right">Money</th></tr></thead><tbody>${body}</tbody></table></div>
   </div>
   <div class="leaderboard-actions">
-    ${team?.industry ? `<button type="button" data-action="nav" data-view="${team.history.length && (team.submitted || team.finished) ? "results" : "round"}">BACK TO ${team.history.length && (team.submitted || team.finished) ? "RESULTS" : "ROUND DASHBOARD"}</button>` : ""}
-    <button type="button" class="ghost" data-action="refresh-leaderboard">REFRESH RANKINGS</button>
-    <small data-leaderboard-age>UPDATES AUTOMATICALLY</small>
+    <button type="button" class="ghost" data-action="refresh-leaderboard">Refresh</button>
+    <small data-leaderboard-age>Updates automatically</small>
   </div>`;
 }
 
@@ -663,10 +648,10 @@ function updateAllocation() {
   const ready = enabled && allValid && left === 0;
   if (enabled) {
     message.textContent = ready
-      ? `ALLOCATIONS VALID · ${money(total)} INVESTED`
+      ? `✓ Ready to submit. All ${money(total)} is invested.`
       : !allValid
-        ? `INVALID · EACH PARAMETER NEEDS A WHOLE AMOUNT OF AT LEAST ${money(team.minAllocation)}`
-        : left > 0 ? `${money(left)} STILL TO ALLOCATE · TOTAL MUST EQUAL ${money(team.budget)}` : `OVER BUDGET BY ${money(-left)} · TOTAL MUST EQUAL ${money(team.budget)}`;
+        ? `Every area needs a whole amount of at least ${money(team.minAllocation)}.`
+        : left > 0 ? `${money(left)} still to invest.` : `That's ${money(-left)} too much. Take some away.`;
     message.className = `total ${ready ? "valid" : "invalid"}`;
   }
   $("#submitRound").disabled = !ready;
@@ -688,7 +673,7 @@ function syncFlash() {
 function openFlashOverlay() {
   flashVisible = true;
   const round = team.activeFlash.round;
-  $("#flashTitle").textContent = `FLASH ${round} OF 0${team.rounds}`;
+  $("#flashTitle").textContent = `News flash · Round ${round} of ${team.rounds}`;
   $("#flash").hidden = false;
   $("#appRoot").inert = true;
   document.body.classList.add("flash-open");
@@ -718,18 +703,18 @@ function updateFlashControls() {
   const left = flashRemaining();
   const locked = left > 0;
   const timer = $("#flashTimer");
-  timer.textContent = team.flashCompleted ? "READ" : timerOn ? formatDuration(left) : "TIMER OFF";
+  timer.textContent = team.flashCompleted ? "Already read" : timerOn ? formatDuration(left) : "No timer";
   timer.classList.toggle("timer-off", !timerOn || team.flashCompleted);
-  $("#flashHint").textContent = team.flashCompleted ? "ALREADY READ · OPEN AGAIN" : "READ THE ROUND FLASH";
+  $("#flashHint").textContent = team.flashCompleted ? "You've read this one" : timerOn ? "Time left" : "Read at your own pace";
   $("#flashTimerNotice").textContent = team.flashCompleted
-    ? "YOU HAVE ALREADY FINISHED THIS FLASH · CLOSE IT WHEN YOU ARE READY"
+    ? "You've already finished this flash. Close it when you're ready."
     : timerOn
-      ? locked ? "SCREEN LOCKED · THIS FLASH ENDS AFTER FIVE MINUTES" : "TIME IS UP · RETURNING YOU TO THE ROUND"
-      : "TIMER OFF · CLOSE THIS FLASH WHEN YOU ARE READY";
+      ? locked ? "This flash stays open for 5 minutes and closes by itself." : "Time's up. Taking you back to the round…"
+      : "Close the flash when your team has finished reading.";
   const close = $("#flashClose");
   close.hidden = timerOn && !team.flashCompleted;
   close.disabled = locked || flashClosing;
-  close.textContent = team.flashCompleted ? "CLOSE FLASH · RETURN TO ROUND" : "DONE READING · RETURN TO ROUND";
+  close.textContent = team.flashCompleted ? "Close" : "Done reading";
   if (!locked && timerOn && !team.flashCompleted && !flashClosing && team.activeFlash && Date.now() >= flashRetryAt) closeFlash(true);
 }
 
@@ -738,7 +723,7 @@ async function closeFlash(automatic = false) {
   flashClosing = true;
   try {
     applyState(await api("/team/flash/close", { method: "POST" }));
-    if (!automatic || team.flashCompleted) toast(`Flash ${team.round} finished. The dataset is unlocked.`, "good");
+    if (!automatic || team.flashCompleted) toast("Flash finished. You can download the data now.", "good");
   } catch (error) {
     flashRetryAt = Date.now() + 3000;
     if (error.payload?.remainingMs) {
@@ -763,7 +748,7 @@ function toast(message, tone = "info") {
   setTimeout(() => el.remove(), 5000);
 }
 
-function confirmAction(title, body, okLabel = "CONFIRM") {
+function confirmAction(title, body, okLabel = "Confirm") {
   const dialog = $("#confirmDialog");
   $("#confirmTitle").textContent = title;
   $("#confirmBody").innerHTML = body;
@@ -790,7 +775,7 @@ async function busy(button, label, task) {
 }
 
 async function downloadDataset(button) {
-  await busy(button, "DOWNLOADING…", async () => {
+  await busy(button, "Downloading…", async () => {
     const response = await api("/team/dataset", { raw: true, timeout: 30000 });
     const blob = await response.blob();
     const match = /filename="?([^";]+)"?/i.exec(response.headers.get("Content-Disposition") || "");
@@ -801,7 +786,7 @@ async function downloadDataset(button) {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(link.href), 15000);
-    toast("Dataset downloaded. The investment table is unlocked.", "good");
+    toast("Data downloaded. You can invest now.", "good");
     await poll();
   });
 }
@@ -809,9 +794,9 @@ async function downloadDataset(button) {
 async function submitRound(button) {
   const values = collectAllocation();
   const allocations = Object.fromEntries(Object.entries(values).map(([name, value]) => [name, Number(value)]));
-  const ok = await confirmAction(`Submit Round ${team.round}?`, `You are investing <b>${money(team.budget)}</b>. You cannot change your investments after submitting.`, "LOCK & SUBMIT");
+  const ok = await confirmAction(`Submit Round ${team.round}?`, `You're investing <b>${money(team.budget)}</b>. You can't change it after you submit.`, "Submit");
   if (!ok) return;
-  await busy(button, "SUBMITTING…", async () => {
+  await busy(button, "Submitting…", async () => {
     const round = team.round;
     const next = await api("/team/submit", { method: "POST", body: { round, allocations } });
     try { localStorage.removeItem(draftKey()); } catch { /* ignore */ }
@@ -824,13 +809,13 @@ async function submitRound(button) {
 }
 
 async function chooseIndustry(button, industry) {
-  const ok = await confirmAction(`Lock in ${industry}?`, `Your team will play all four rounds on the <b>${esc(industry)}</b> desk. This cannot be changed later.`, `LOCK IN ${industry.toUpperCase()}`);
+  const ok = await confirmAction(`Lock in ${industry}?`, `Your team will play all four rounds in <b>${esc(industry)}</b>. You can't change this later.`, `Lock in ${industry}`);
   if (!ok) return;
-  await busy(button, "RESERVING INDUSTRY SEAT…", async () => {
+  await busy(button, "Saving…", async () => {
     applyState(await api("/team/industry", { method: "POST", body: { industry } }));
     ui.view = "round";
     render();
-    toast(`${industry} locked in. Round 1 is ready.`, "good");
+    toast(`${industry} is locked in. Round 1 is ready.`, "good");
   });
 }
 
@@ -855,7 +840,7 @@ document.addEventListener("click", async event => {
     return;
   }
   if (action === "sign-out") {
-    const ok = await confirmAction("Sign out?", "You can sign back in any time with your team name and PIN.", "SIGN OUT");
+    const ok = await confirmAction("Sign out?", "You can sign back in any time with your team name and PIN.", "Sign out");
     if (ok) endSession("");
     return;
   }
@@ -882,13 +867,13 @@ document.addEventListener("click", async event => {
   }
   if (action === "open-flash") {
     if (ui.view !== "round") { ui.view = "round"; render(); }
-    return busy(button, "OPENING…", async () => applyState(await api("/team/flash/open", { method: "POST" })));
+    return busy(button, "Opening…", async () => applyState(await api("/team/flash/open", { method: "POST" })));
   }
   if (action === "close-flash") return closeFlash(false);
   if (action === "download-dataset") return downloadDataset(button);
   if (action === "submit-round") return submitRound(button);
   if (action === "advance") {
-    return busy(button, "OPENING…", async () => {
+    return busy(button, "Opening…", async () => {
       applyState(await api("/team/advance", { method: "POST", body: { round: team.round } }));
       ui.view = "round";
       render();
@@ -906,7 +891,7 @@ document.addEventListener("click", async event => {
     updateAllocation();
     return;
   }
-  if (action === "refresh-leaderboard") return busy(button, "REFRESHING…", () => refreshLeaderboard(true));
+  if (action === "refresh-leaderboard") return busy(button, "Refreshing…", () => refreshLeaderboard(true));
 });
 
 document.addEventListener("submit", async event => {
@@ -919,7 +904,7 @@ document.addEventListener("submit", async event => {
   ui.loginError = "";
   form.querySelector(".form-error")?.remove();
   button.disabled = true;
-  button.textContent = "CONNECTING…";
+  button.textContent = "Signing in…";
   try {
     const result = await api("/team/connect", { method: "POST", body: { teamId, pin }, auth: false, timeout: 20000 });
     saveSession({ teamId: result.state.teamId, token: result.token });
@@ -937,7 +922,7 @@ document.addEventListener("submit", async event => {
     message.textContent = error.message;
     button.before(message);
     button.disabled = false;
-    button.textContent = "ENTER THE NEWSROOM";
+    button.textContent = "Sign in";
   }
 });
 
