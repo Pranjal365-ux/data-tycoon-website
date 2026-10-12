@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 
-from conftest import CONSOLE, admin_headers, connect, even_split, ready_round, set_settings
+from conftest import CONSOLE, admin_headers, connect, create_team, even_split, ready_round, set_settings, team_action
 
 from api import _rules as rules
 from api import index as api
@@ -46,12 +46,22 @@ def test_vercel_route_parameter(client):
 
 # ── Team sign-in ─────────────────────────────────────────────────────────────
 
-def test_connect_creates_team_and_checks_pin(client):
+def test_players_cannot_create_teams(client, db):
+    unknown = client.post("/api/team/connect", json={"teamId": "Brand New", "pin": "1234"})
+    assert unknown.status_code == 401 and "No team" in unknown.json()["error"]
+    assert db.data_tycoon_teams.count_documents({}) == 0
+    # A team without a PIN cannot claim one by signing in.
+    db.data_tycoon_teams.insert_one({**api.new_team("No Pin"), "_id": "no pin", "pinHash": ""})
+    assert client.post("/api/team/connect", json={"teamId": "No Pin", "pin": "1234"}).status_code == 401
+    assert db.data_tycoon_teams.find_one({"_id": "no pin"})["pinHash"] == ""
+
+
+def test_connect_checks_pin(client):
     headers, state = connect(client, "Team Alpha", "1234")
     assert state["companyValue"] == rules.BASE_BUDGET and state["industry"] == ""
     assert {item["industry"] for item in state["industryCapacity"]} == set(rules.INDUSTRIES)
     # Same team, different case and spacing, correct PIN.
-    _, again = connect(client, "  team   ALPHA ", "1234")
+    _, again = connect(client, "  team   ALPHA ", "1234", create=False)
     assert again["teamId"] == "Team Alpha"
     wrong = client.post("/api/team/connect", json={"teamId": "Team Alpha", "pin": "9999"})
     assert wrong.status_code == 401
@@ -59,7 +69,8 @@ def test_connect_creates_team_and_checks_pin(client):
 
 
 def test_team_name_and_pin_validation(client):
-    assert client.post("/api/team/connect", json={"teamId": "<script>", "pin": "1234"}).status_code == 400
+    assert client.post("/api/team/connect", json={"teamId": "<script>", "pin": "1234"}).status_code == 401
+    assert create_team(client, "<script>")["skipped"][0]["teamId"] == "<script>"
     assert client.post("/api/team/connect", json={"teamId": "Team", "pin": "12"}).status_code == 400
     assert client.post("/api/team/connect", json={"teamId": "x", "pin": "1234"}).status_code == 400
 
@@ -129,7 +140,9 @@ def test_flash_and_dataset_are_gated(client, db):
     assert client.get("/api/team/flash/page/1?round=2", headers=headers).status_code == 403
     assert client.get("/api/team/dataset", headers=headers).status_code == 403
 
-    set_settings(client, flashTimer=True)
+    not_started = client.post("/api/team/flash/open", headers=headers)
+    assert not_started.status_code == 409 and "not started" in not_started.json()["error"]
+    set_settings(client, flashTimer=True, openRound=1)
     state = client.post("/api/team/flash/open", headers=headers).json()
     assert state["activeFlash"]["round"] == 1 and state["activeFlash"]["remainingMs"] > 290_000
     page = client.get("/api/team/flash/page/1", headers=headers)
@@ -157,7 +170,8 @@ def test_flash_and_dataset_are_gated(client, db):
 def test_timer_off_allows_closing_at_once_and_turning_it_on_restarts(client):
     headers, _ = connect(client)
     client.post("/api/team/industry", json={"industry": "Education"}, headers=headers)
-    client.post("/api/team/flash/open", headers=headers)
+    set_settings(client, openRound=1)
+    assert client.post("/api/team/flash/open", headers=headers).status_code == 200
     set_settings(client, flashTimer=True)
     state = client.get("/api/team/state", headers=headers).json()
     assert state["activeFlash"]["remainingMs"] > 295_000
@@ -224,23 +238,85 @@ def test_submit_validation(client):
 
 # ── Rounds ───────────────────────────────────────────────────────────────────
 
-def test_round_wait_and_bonus(client):
+def test_round_control_wait_and_bonus(client):
     headers, _ = connect(client)
     client.post("/api/team/industry", json={"industry": "Travel and Auto"}, headers=headers)
     state = ready_round(client, headers)
     after = client.post("/api/team/submit", json={"round": 1, "allocations": even_split(state)}, headers=headers).json()
-    assert after["roundWaitRemainingMs"] > 29 * 60 * 1000
+    assert after["nextRoundOpen"] is False and after["roundWaitRemainingMs"] == 0
     blocked = client.post("/api/team/advance", json={"round": 1}, headers=headers)
-    assert blocked.status_code == 409
-    set_settings(client, roundWait=False)
+    assert blocked.status_code == 409 and "not started" in blocked.json()["error"]
+    set_settings(client, openRound=2, waitMinutes=30)
+    waiting = client.get("/api/team/state", headers=headers).json()
+    assert waiting["nextRoundOpen"] and waiting["roundWaitRemainingMs"] > 29 * 60 * 1000
+    assert client.post("/api/team/advance", json={"round": 1}, headers=headers).status_code == 409
+    set_settings(client, waitMinutes=0)
     opened = client.post("/api/team/advance", json={"round": 1}, headers=headers).json()
     assert opened["round"] == 2 and opened["budget"] == after["companyValue"] + rules.ROUND_BONUS
     # Advancing twice (e.g. from a second tab) is harmless.
     assert client.post("/api/team/advance", json={"round": 1}, headers=headers).json()["round"] == 2
 
 
+def test_scheduled_round_opens_on_time(client, db):
+    headers, _ = connect(client)
+    client.post("/api/team/industry", json={"industry": "Food"}, headers=headers)
+    result = set_settings(client, schedule={"round": 1, "minutes": 10})
+    assert result["rounds"]["open"] == 0 and result["rounds"]["scheduledRound"] == 1
+    state = client.get("/api/team/state", headers=headers).json()
+    assert not state["roundOpen"] and state["scheduledRound"] == 1 and state["scheduledInMs"] > 9 * 60_000
+    db.data_tycoon_settings.update_one({"_id": "round-control"}, {"$set": {"scheduledAt": api.now_ms() - 1}})
+    api._cache.clear()
+    state = client.get("/api/team/state", headers=headers).json()
+    assert state["roundOpen"] and state["scheduledRound"] == 0
+    # Later changes keep the round that the schedule opened.
+    assert set_settings(client, waitMinutes=5)["rounds"]["open"] == 1
+    assert client.patch("/api/admin/settings", json={"schedule": {"round": 1, "minutes": 1}}, headers=admin_headers(client)).status_code == 400
+
+
+def test_pause_blocks_play(client):
+    headers, _ = connect(client)
+    client.post("/api/team/industry", json={"industry": "Food"}, headers=headers)
+    set_settings(client, openRound=1, paused=True)
+    paused = client.post("/api/team/flash/open", headers=headers)
+    assert paused.status_code == 409 and "paused" in paused.json()["error"]
+    assert paused.json()["state"]["paused"] is True
+    set_settings(client, paused=False)
+    assert client.post("/api/team/flash/open", headers=headers).status_code == 200
+
+
+def test_flash_can_only_be_seen_once(client, db):
+    headers, _ = connect(client)
+    client.post("/api/team/industry", json={"industry": "Food"}, headers=headers)
+    set_settings(client, openRound=1)
+    assert client.post("/api/team/flash/open", headers=headers).status_code == 200
+    assert client.get("/api/team/flash/page/1", headers=headers).status_code == 200
+    assert client.post("/api/team/flash/close", headers=headers).json()["flashCompleted"]
+    again = client.post("/api/team/flash/open", headers=headers)
+    assert again.status_code == 409 and "only be seen once" in again.json()["error"]
+    assert client.get("/api/team/flash/page/1", headers=headers).status_code == 403
+    # An organizer can give the team one more viewing.
+    assert team_action(client, "team alpha", "reopen-flash").status_code == 200
+    assert client.get("/api/team/state", headers=headers).json()["flashCompleted"] is False
+    assert client.post("/api/team/flash/open", headers=headers).status_code == 200
+    assert client.get("/api/team/flash/page/2", headers=headers).status_code == 200
+
+    # With the timer on, the flash ends when time runs out, even across a sign-in.
+    set_settings(client, flashTimer=True, flashMinutes=2)
+    state = client.get("/api/team/state", headers=headers).json()
+    assert 100_000 < state["activeFlash"]["remainingMs"] <= 120_000
+    past = api.now_ms() - 3 * 60_000
+    db.data_tycoon_teams.update_one({"_id": "team alpha"}, {"$set": {"activeFlash.startedAt": past}})
+    db.data_tycoon_settings.update_one({"_id": "flash-timer"}, {"$set": {"changedAt": past}})
+    api._cache.clear()
+    assert client.get("/api/team/flash/page/1", headers=headers).status_code == 403
+    headers, _ = connect(client, create=False)
+    expired = client.post("/api/team/flash/open", headers=headers)
+    assert expired.status_code == 409 and expired.json()["state"]["flashCompleted"] is True
+    assert client.get("/api/team/dataset", headers=headers).status_code == 200
+
+
 def test_full_game_and_finish(client):
-    set_settings(client, roundWait=False)
+    set_settings(client, openRound=4)
     headers, _ = connect(client)
     client.post("/api/team/industry", json={"industry": "Pharma"}, headers=headers)
     for round_number in range(1, 5):
@@ -259,8 +335,7 @@ def test_balance_change_between_view_and_submit_is_rejected(client):
     headers, _ = connect(client)
     client.post("/api/team/industry", json={"industry": "Food"}, headers=headers)
     state = ready_round(client, headers)
-    admin = admin_headers(client)
-    client.patch("/api/admin/team-balance", json={"teamKey": "team alpha", "companyValue": 2_000_000}, headers=admin)
+    team_action(client, "team alpha", "set-balance", 2_000_000)
     stale = client.post("/api/team/submit", json={"round": 1, "allocations": even_split(state)}, headers=headers)
     assert stale.status_code == 400 and stale.json()["budget"] == 2_000_000
     fresh = client.get("/api/team/state", headers=headers).json()
@@ -376,8 +451,9 @@ def test_admin_dashboard_balance_and_pin_reset(client):
     client.post("/api/team/activity", json={"kind": "screenshot-suspected", "detail": "Cmd+Shift"}, headers=headers)
     admin = admin_headers(client)
     dashboard = client.get("/api/admin/dashboard", headers=admin).json()
-    assert dashboard["teams"][0]["teamId"] == "Team Alpha" and dashboard["teams"][0]["online"]
-    assert "pinHash" not in str(dashboard)
+    row = dashboard["teams"][0]
+    assert row["teamId"] == "Team Alpha" and row["online"] and row["alerts"] == 1 and row["flash"] == "not-opened"
+    assert "pinHash" not in str(dashboard) and "1234" not in str(dashboard["teams"])
     assert [item["kind"] for item in dashboard["activities"]] == ["screenshot-suspected"]
     assert dashboard["recentAlerts"] == 1
     filtered = client.get("/api/admin/dashboard", params={"industry": "Pharma"}, headers=admin).json()
@@ -385,26 +461,131 @@ def test_admin_dashboard_balance_and_pin_reset(client):
     everything = client.get("/api/admin/dashboard", params={"kind": "all"}, headers=admin).json()
     assert {"team-connected", "industry-locked"} <= {item["kind"] for item in everything["activities"]}
 
-    assert client.patch("/api/admin/team-balance", json={"teamKey": "team alpha", "companyValue": -5}, headers=admin).status_code == 400
-    assert client.patch("/api/admin/team-balance", json={"teamKey": "team alpha", "companyValue": 1_500_000}, headers=admin).status_code == 200
+    assert team_action(client, "team alpha", "set-balance", -5).status_code == 400
+    assert team_action(client, "team alpha", "set-balance", 1_500_000).status_code == 200
     assert client.get("/api/team/state", headers=headers).json()["companyValue"] == 1_500_000
 
-    assert client.post("/api/admin/team-reset-pin", json={"teamKey": "team alpha"}, headers=admin).status_code == 200
+    reset = team_action(client, "team alpha", "set-pin", "new-pin-5678")
+    assert reset.status_code == 200 and reset.json()["pin"] == "new-pin-5678"
     assert client.get("/api/team/state", headers=headers).status_code == 401
-    new_headers, state = connect(client, "Team Alpha", "new-pin-5678")
+    new_headers, state = connect(client, "Team Alpha", "new-pin-5678", create=False)
     assert state["companyValue"] == 1_500_000
     assert client.post("/api/team/connect", json={"teamId": "Team Alpha", "pin": "1234"}).status_code == 401
+    generated = team_action(client, "team alpha", "set-pin").json()["pin"]
+    assert len(generated) == 6 and generated.isdigit()
+    detail = client.get("/api/admin/team", params={"key": "team alpha"}, headers=admin).json()
+    assert detail["pin"] == generated and detail["industry"] == "Food"
 
 
 def test_leaderboard_order_and_fields(client):
     a, _ = connect(client, "Alpha")
     b, _ = connect(client, "Bravo")
-    admin = admin_headers(client)
-    client.patch("/api/admin/team-balance", json={"teamKey": "bravo", "companyValue": 2_000_000}, headers=admin)
+    team_action(client, "bravo", "set-balance", 2_000_000)
     api._cache.clear()
     rows = client.get("/api/leaderboard").json()
     assert [row["teamId"] for row in rows] == ["Bravo", "Alpha"]
     assert set(rows[0]) == {"teamId", "industry", "round", "companyValue", "isEliminated"}
+
+
+def test_bulk_team_creation_and_credentials(client, db):
+    admin = admin_headers(client)
+    body = {"teams": [{"teamId": "Red"}, {"teamId": "Blue", "pin": "4321", "industry": "Pharma"}, {"teamId": "red"},
+                      {"teamId": "Green", "industry": "Mining"}, {"teamId": "Grey", "pin": "12"}]}
+    result = client.post("/api/admin/teams", json=body, headers=admin).json()
+    assert [row["teamId"] for row in result["created"]] == ["Red", "Blue"]
+    assert {row["teamId"] for row in result["skipped"]} == {"red", "Green", "Grey"}
+    red_pin = result["created"][0]["pin"]
+    assert len(red_pin) == 6 and red_pin.isdigit()
+    assert client.post("/api/admin/teams", json={"teams": [{"teamId": "RED"}]}, headers=admin).json()["skipped"]
+    _, blue = connect(client, "Blue", "4321", create=False)
+    assert blue["industry"] == "Pharma"
+    api._cache.clear()
+    pharma = next(item for item in client.get("/api/industry-capacity").json() if item["industry"] == "Pharma")
+    assert pharma["assigned"] == 1
+    connect(client, "Red", red_pin, create=False)
+    csv = client.get("/api/admin/export/credentials", headers=admin)
+    assert csv.status_code == 200 and f"Red,{red_pin}" in csv.text and "Blue,4321,Pharma" in csv.text
+    assert client.get("/api/admin/export/credentials").status_code == 404
+    assert client.post("/api/admin/teams", json={"teams": [{"teamId": "Nope"}]}, headers={"X-Console-Key": CONSOLE}).status_code == 401
+
+
+def test_team_actions(client, db):
+    headers, _ = connect(client)
+    client.post("/api/team/industry", json={"industry": "Food"}, headers=headers)
+    state = ready_round(client, headers)
+    submitted = client.post("/api/team/submit", json={"round": 1, "allocations": even_split(state)}, headers=headers).json()
+    assert submitted["submitted"]
+
+    assert team_action(client, "team alpha", "undo-submission").status_code == 200
+    undone = client.get("/api/team/state", headers=headers).json()
+    assert not undone["submitted"] and undone["companyValue"] == rules.BASE_BUDGET and undone["history"] == []
+    assert undone["flashCompleted"] and undone["datasetDownloaded"]  # can resubmit straight away
+    assert team_action(client, "team alpha", "undo-submission").status_code == 409
+
+    assert team_action(client, "team alpha", "advance").status_code == 200
+    assert client.get("/api/team/state", headers=headers).json()["round"] == 2
+    assert team_action(client, "team alpha", "set-round", 9).status_code == 400
+    team_action(client, "team alpha", "set-round", 1)
+
+    team_action(client, "team alpha", "complete-flash")
+    team_action(client, "team alpha", "notice", "Please come to the front desk.")
+    state = client.get("/api/team/state", headers=headers).json()
+    assert state["notice"]["text"] == "Please come to the front desk."
+    team_action(client, "team alpha", "notice", "")
+    assert client.get("/api/team/state", headers=headers).json()["notice"] is None
+
+    team_action(client, "team alpha", "set-industry", "Pharma")
+    api._cache.clear()
+    seats = {item["industry"]: item["assigned"] for item in client.get("/api/industry-capacity").json()}
+    assert seats["Food"] == 0 and seats["Pharma"] == 1
+
+    team_action(client, "team alpha", "set-eliminated", True)
+    assert client.get("/api/team/state", headers=headers).json()["finished"]
+    team_action(client, "team alpha", "set-eliminated", False)
+
+    assert team_action(client, "team alpha", "sign-out").status_code == 200
+    assert client.get("/api/team/state", headers=headers).status_code == 401
+
+    create_team(client, "Taken", "1111")
+    assert team_action(client, "team alpha", "rename", "taken").status_code == 409
+    renamed = team_action(client, "team alpha", "rename", "Team Omega")
+    assert renamed.json()["key"] == "team omega"
+    assert client.post("/api/team/connect", json={"teamId": "Team Alpha", "pin": "1234"}).status_code == 401
+    omega, state = connect(client, "Team Omega", "1234", create=False)
+    assert state["industry"] == "Pharma"
+    assert db.data_tycoon_activities.count_documents({"teamKey": "team alpha"}) == 0
+
+    assert team_action(client, "team omega", "delete").status_code == 200
+    assert client.get("/api/team/state", headers=omega).status_code == 401
+    api._cache.clear()
+    seats = {item["industry"]: item["assigned"] for item in client.get("/api/industry-capacity").json()}
+    assert seats["Pharma"] == 0
+    assert team_action(client, "team omega", "delete").status_code == 404
+    assert team_action(client, "taken", "explode").status_code == 400
+
+
+def test_wipe_and_reset(client, db):
+    connect(client)
+    set_settings(client, openRound=2, flashTimer=True, announcement="Lunch at 1")
+    admin = admin_headers(client)
+    assert client.post("/api/admin/wipe", json={"scope": "all", "confirm": "reset"}, headers=admin).status_code == 400
+    assert client.post("/api/admin/wipe", json={"scope": "teams", "confirm": "DELETE TEAMS"}, headers=admin).json()["deletedTeams"] == 1
+    assert db.data_tycoon_teams.count_documents({}) == 0
+    assert client.get("/api/admin/dashboard", headers=admin).json()["settings"]["rounds"]["open"] == 2
+    connect(client, "Second")
+    assert client.post("/api/admin/wipe", json={"scope": "all", "confirm": "RESET"}, headers=admin).status_code == 200
+    fresh = client.get("/api/admin/dashboard", headers=admin).json()
+    assert fresh["teams"] == [] and fresh["settings"]["rounds"]["open"] == 0
+    assert fresh["settings"]["flashTimer"]["enabled"] is False and fresh["settings"]["announcement"]["text"] == ""
+
+
+def test_announcement_and_results_export(client):
+    headers, _ = connect(client)
+    set_settings(client, announcement="Round 2 starts at 3 pm")
+    state = client.get("/api/team/state", headers=headers).json()
+    assert state["settings"]["announcement"]["text"] == "Round 2 starts at 3 pm"
+    csv = client.get("/api/admin/export/results", headers=admin_headers(client))
+    assert csv.status_code == 200 and "Team Alpha" in csv.text and csv.text.startswith("Rank,Team")
 
 
 def test_payout_rounding_matches_javascript_math_round():

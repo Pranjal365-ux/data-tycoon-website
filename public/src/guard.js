@@ -2,25 +2,35 @@
 //
 // Browsers cannot see operating-system screenshots directly, so this combines
 // every signal a web page does get, on Windows, macOS, Linux and ChromeOS:
-//  * Print Screen arrives as keyup only on Windows; we listen to both.
-//  * Win+Shift+S (Snipping Tool) and Cmd+Shift+3/4/5 (macOS) are swallowed by
-//    the OS, but the Win/Cmd and Shift presses reach the page first. The
-//    flash is blanked as soon as that pair is held, before the capture key.
+//  * The flash is blanked the moment Windows/Command, Shift or Alt goes down,
+//    and stays blank for as long as any of them is held (no time limit). It is
+//    shown again only once the keys are released, which is re-checked on every
+//    key and mouse event, so a missed key release cannot leave it uncovered.
+//    Every screenshot shortcut (Win+Shift+S, Win+PrtScn, Alt+PrtScn,
+//    Cmd+Shift+3/4/5, Cmd+Ctrl+Shift+3/4) starts with one of those keys.
+//  * Print Screen arrives as keyup only on Windows. The clipboard copy it
+//    makes is overwritten straight away, and again when the team comes back
+//    to the page, so a pasted capture comes out empty.
 //  * Launching Snipping Tool, Alt-Tab, switching tabs or apps all take focus
 //    away: the flash is blanked and the organizers are alerted (tab lock).
 //  * The pointer leaving the window (e.g. towards a taskbar screenshot tool)
 //    blanks the flash until it comes back.
-// Phone cameras and phone screenshot buttons cannot be detected by any
-// website; the team-name watermark on every page is the deterrent there.
+// Limits no web page can get around: a key pressed within the same screen
+// refresh (about 1/60 s) as the capture key, Print Screen on its own (Windows
+// only tells the page after the capture), and phone cameras. The team-name
+// watermark on every page is the deterrent there.
 
 const REPORT_DEDUPE_MS = 2500;
-const MODIFIER_COVER_MS = 1500;
+const KEY_COVER_MS = 1500;
+const HOLD_MESSAGE = "Flash hidden while Windows / Command, Shift or Alt is held. Let go of the keys to keep reading.";
 
 let active = false;
 let options = null;
 let away = null;
 let modifierTimer = null;
 let pointerOutside = false;
+let keysHeld = false;
+let coverUntil = 0;
 const lastReport = new Map();
 
 const shield = () => document.querySelector("#flashShield");
@@ -34,23 +44,48 @@ function report(kind, detail) {
   options?.report(kind, detail);
 }
 
+// The shield is always laid out; only its visibility flips, so blanking costs
+// no layout work and lands on the very next frame.
 function cover(message) {
   const el = shield();
   if (!el) return;
-  shieldText().textContent = message;
-  el.hidden = false;
+  el.classList.add("on");
+  if (shieldText().textContent !== message) shieldText().textContent = message;
 }
 
 function uncover() {
-  if (away || pointerOutside || lockCard()?.hidden === false) return;
-  const el = shield();
-  if (el) el.hidden = true;
+  if (away || pointerOutside || keysHeld || Date.now() < coverUntil || lockCard()?.hidden === false) return;
+  shield()?.classList.remove("on");
 }
 
-function coverBriefly(message) {
-  cover(message);
+function scheduleUncover(delay) {
   clearTimeout(modifierTimer);
-  modifierTimer = setTimeout(uncover, MODIFIER_COVER_MS);
+  modifierTimer = setTimeout(uncover, delay);
+}
+
+function coverFor(message, ms) {
+  cover(message);
+  coverUntil = Math.max(coverUntil, Date.now() + ms);
+  scheduleUncover(ms + 50);
+}
+
+// Windows/Command, Shift or Alt: the first key of every screenshot shortcut.
+function riskyKeysHeld(event) {
+  return Boolean(event.metaKey || event.shiftKey || event.altKey || event.getModifierState?.("OS") || event.getModifierState?.("Meta"));
+}
+
+function syncHeld(event) {
+  const held = riskyKeysHeld(event);
+  if (held === keysHeld) return;
+  keysHeld = held;
+  if (held) cover(HOLD_MESSAGE);
+  else scheduleUncover(250);
+}
+
+function wipeClipboard() {
+  try {
+    navigator.clipboard?.writeText?.("Screenshots of the news flash are not allowed.").catch(() => {});
+  } catch { /* Clipboard access refused: nothing else to do. */ }
 }
 
 function leave(kind, detail) {
@@ -65,6 +100,7 @@ function comeBack() {
   if (!active || !away || document.hidden || !document.hasFocus()) return;
   const seconds = Math.max(1, Math.round((Date.now() - away.since) / 1000));
   away = null;
+  wipeClipboard();
   report("focus-return", `Returned to the flash after ${seconds} s away.`);
   const card = lockCard();
   if (card) {
@@ -78,36 +114,38 @@ function isPrintScreen(event) {
   return event.key === "PrintScreen" || event.code === "PrintScreen" || event.keyCode === 44;
 }
 
+function isModifierKey(event) {
+  return ["Meta", "OS", "Super", "Shift", "Alt", "AltGraph", "Control"].includes(event.key);
+}
+
 function onKeyDown(event) {
   if (!active) return;
   const key = (event.key || "").toLowerCase();
   const mod = event.ctrlKey || event.metaKey;
+  syncHeld(event);
 
   if (isPrintScreen(event)) {
     event.preventDefault();
-    cover("Screenshots are not allowed during a flash.");
+    coverFor("Screenshots are not allowed during a flash.", KEY_COVER_MS);
+    wipeClipboard();
     report("screenshot-shortcut", "Print Screen key pressed.");
     return;
   }
-  if (event.key === "Meta" || event.key === "OS" || event.key === "Super") {
-    coverBriefly("Flash hidden while the Windows / Command key is held.");
-    if (event.shiftKey) report("screenshot-suspected", "Windows/Command + Shift held (screenshot shortcut).");
-    return;
-  }
-  if (event.key === "Shift" && event.metaKey) {
-    coverBriefly("Screenshots are not allowed during a flash.");
-    report("screenshot-suspected", "Windows/Command + Shift held (screenshot shortcut).");
+  if (isModifierKey(event)) {
+    if ((event.metaKey && event.shiftKey) || (event.ctrlKey && event.shiftKey && event.metaKey)) {
+      report("screenshot-suspected", `${event.ctrlKey ? "Ctrl+" : ""}Windows/Command + Shift held (screenshot shortcut).`);
+    }
     return;
   }
   if (event.metaKey && event.shiftKey && ["3", "4", "5", "6", "s", "#", "$", "%", "^"].includes(key)) {
     event.preventDefault();
-    cover("Screenshots are not allowed during a flash.");
+    coverFor("Screenshots are not allowed during a flash.", KEY_COVER_MS);
     report("screenshot-shortcut", `Screenshot shortcut (${event.ctrlKey ? "Ctrl+" : ""}Cmd/Win+Shift+${event.key}).`);
     return;
   }
   if (event.ctrlKey && event.shiftKey && ["s", "printscreen"].includes(key)) {
     event.preventDefault();
-    cover("Screenshots are not allowed during a flash.");
+    coverFor("Screenshots are not allowed during a flash.", KEY_COVER_MS);
     report("screenshot-shortcut", `Screenshot shortcut (Ctrl+Shift+${event.key}).`);
     return;
   }
@@ -128,16 +166,24 @@ function onKeyDown(event) {
 function onKeyUp(event) {
   if (!active) return;
   if (isPrintScreen(event)) {
-    // Windows hands Print Screen to the page only on key release.
-    cover("Screenshots are not allowed during a flash.");
+    // Windows hands Print Screen to the page only on key release: replace
+    // whatever it just copied, and keep the flash hidden for a moment.
+    coverFor("Screenshots are not allowed during a flash.", KEY_COVER_MS);
+    wipeClipboard();
     report("screenshot-shortcut", "Print Screen key pressed.");
-    clearTimeout(modifierTimer);
-    modifierTimer = setTimeout(uncover, MODIFIER_COVER_MS);
     return;
   }
-  if (["Meta", "OS", "Super", "Shift"].includes(event.key)) {
-    clearTimeout(modifierTimer);
-    modifierTimer = setTimeout(uncover, 400);
+  syncHeld(event);
+}
+
+// Mouse events carry the live modifier state too: they catch a key release
+// the page never heard about (macOS often swallows them during a capture).
+function onPointerActivity(event) {
+  if (!active) return;
+  syncHeld(event);
+  if (pointerOutside) {
+    pointerOutside = false;
+    uncover();
   }
 }
 
@@ -159,11 +205,6 @@ const onPointerLeave = event => {
   pointerOutside = true;
   cover("Move your pointer back onto the page to keep reading.");
 };
-const onPointerEnter = () => {
-  if (!pointerOutside) return;
-  pointerOutside = false;
-  uncover();
-};
 
 const listeners = [
   [document, "keydown", onKeyDown],
@@ -175,7 +216,9 @@ const listeners = [
   [document, "selectstart", block],
   [document, "visibilitychange", onVisibility],
   [document, "mouseout", onPointerLeave],
-  [document, "mousemove", onPointerEnter],
+  [document, "mousemove", onPointerActivity],
+  [document, "mousedown", onPointerActivity],
+  [document, "wheel", onPointerActivity],
   [window, "blur", onBlur],
   [window, "focus", onFocus],
   [window, "pagehide", onPageHide],
@@ -188,6 +231,8 @@ export function startGuard(nextOptions) {
   active = true;
   away = null;
   pointerOutside = false;
+  keysHeld = false;
+  coverUntil = 0;
   listeners.forEach(([target, type, handler]) => target.addEventListener(type, handler, true));
   lockCard()?.querySelector("button")?.addEventListener("click", resumeReading);
   if (document.hidden || !document.hasFocus()) leave("window-blur", "The flash opened while the page was not in focus.");
@@ -198,15 +243,18 @@ export function stopGuard() {
   active = false;
   away = null;
   pointerOutside = false;
+  keysHeld = false;
+  coverUntil = 0;
   clearTimeout(modifierTimer);
   listeners.forEach(([target, type, handler]) => target.removeEventListener(type, handler, true));
   lockCard()?.querySelector("button")?.removeEventListener("click", resumeReading);
   if (lockCard()) lockCard().hidden = true;
-  if (shield()) shield().hidden = true;
+  shield()?.classList.remove("on");
 }
 
 function resumeReading() {
   pointerOutside = false;
+  wipeClipboard();
   lockCard().hidden = true;
   uncover();
 }

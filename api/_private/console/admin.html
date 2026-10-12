@@ -8,9 +8,9 @@
   <meta name="referrer" content="no-referrer" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <title>Organizer Portal | Data Tycoon</title>
-  <link rel="stylesheet" href="/src/fonts.css?v=50" />
-  <link rel="stylesheet" href="{{CONSOLE_BASE}}/admin.css?v=50" />
-  <script type="module" src="{{CONSOLE_BASE}}/admin.js?v=50"></script>
+  <link rel="stylesheet" href="/src/fonts.css?v=80" />
+  <link rel="stylesheet" href="{{CONSOLE_BASE}}/admin.css?v=80" />
+  <script type="module" src="{{CONSOLE_BASE}}/admin.js?v=80"></script>
 </head>
 <body>
   <header class="admin-header">
@@ -21,7 +21,7 @@
     <section id="loginPanel" class="login-panel">
       <p class="eyebrow">PRIVATE EVENT CONTROLS</p>
       <h1>Organizer sign in</h1>
-      <p>Sign in to view live team balances, integrity alerts, and leaderboard standings. Do not share this page's address.</p>
+      <p>Sign in to run the rounds, manage teams, and watch balances and integrity alerts. Do not share this page's address.</p>
       <form id="adminLoginForm">
         <label for="adminPassword">Organizer password</label>
         <input id="adminPassword" type="password" autocomplete="current-password" required />
@@ -32,20 +32,41 @@
 
     <section id="dashboard" hidden>
       <div class="dashboard-heading">
-        <div><p class="eyebrow">LIVE EVENT CONTROL</p><h1>Organizer dashboard</h1><p class="muted">Teams, balances and alerts refresh automatically every three seconds.</p></div>
+        <div><p class="eyebrow">LIVE EVENT CONTROL</p><h1>Organizer dashboard</h1><p class="muted">Everything refreshes automatically every three seconds.</p></div>
       </div>
 
+      <section class="panel game-control" aria-labelledby="gameHeading">
+        <div class="panel-heading"><div><p class="eyebrow">GAME CONTROL</p><h2 id="gameHeading">Rounds</h2></div><strong id="gameStatus" class="game-status">LOADING</strong></div>
+        <div class="round-track" id="roundTrack"></div>
+        <div class="control-grid">
+          <div class="control-block">
+            <h3>Open the next round</h3>
+            <p class="muted" id="openHint">Teams can only start a round once you open it.</p>
+            <div class="control-row"><button id="openNextButton" type="button" class="button-primary">START ROUND 1</button><button id="closeRoundButton" type="button" class="button-secondary">CLOSE LATEST ROUND</button></div>
+            <div class="control-row"><label for="scheduleMinutes">Or open it automatically in</label><input id="scheduleMinutes" type="number" min="0" max="600" step="1" value="10"><span>minutes</span><button id="scheduleButton" type="button" class="button-secondary">SCHEDULE</button></div>
+            <p id="scheduleStatus" class="schedule-status" hidden></p>
+          </div>
+          <div class="control-block">
+            <h3>Wait after a team submits</h3>
+            <p class="muted">Minimum time between a team submitting and starting the next round, even when it is open. 0 means no wait.</p>
+            <div class="control-row"><input id="waitMinutes" type="number" min="0" max="240" step="1" value="0"><span>minutes</span><button id="waitButton" type="button" class="button-secondary">SAVE</button></div>
+          </div>
+          <div class="control-block">
+            <h3>Flash timer</h3>
+            <p class="muted" id="flashTimerDescription">Loading…</p>
+            <div class="control-row"><button id="flashTimerToggle" type="button" class="button-secondary">LOADING</button><input id="flashMinutes" type="number" min="1" max="60" step="1" value="5" aria-label="Flash minutes"><span>minutes</span><button id="flashMinutesButton" type="button" class="button-secondary">SAVE</button></div>
+          </div>
+          <div class="control-block">
+            <h3>Pause and announcements</h3>
+            <p class="muted">Pausing stops teams from opening flashes, submitting and moving on. Everything is saved.</p>
+            <div class="control-row"><button id="pauseButton" type="button" class="button-secondary">PAUSE GAME</button></div>
+            <div class="control-row"><input id="announcementText" type="text" maxlength="280" placeholder="Message shown to every team"><button id="announceButton" type="button" class="button-secondary">SEND</button><button id="announceClear" type="button" class="button-secondary">CLEAR</button></div>
+            <p id="announcementNow" class="muted small"></p>
+          </div>
+        </div>
+      </section>
+
       <div class="integrity-note"><strong>Integrity alerts:</strong> While a flash is open, the organizers are alerted when the browser sees a screenshot shortcut (Print Screen, Win/Cmd + Shift), a print or developer-tools attempt, or the team leaving the tab or window. Phone cameras and some operating system screenshot tools cannot be detected by any website.</div>
-
-      <section class="panel flash-timer-control" aria-labelledby="flashTimerHeading">
-        <div><p class="eyebrow">ROUND ACCESS CONTROL</p><h2 id="flashTimerHeading">Flash timer</h2><p id="flashTimerDescription" class="muted">Loading current timer setting…</p></div>
-        <div class="flash-timer-action"><strong id="flashTimerStatus">LOADING</strong><button id="flashTimerToggle" class="button-secondary" type="button" disabled>LOADING</button></div>
-      </section>
-
-      <section class="panel flash-timer-control round-wait-control" aria-labelledby="roundWaitHeading">
-        <div><p class="eyebrow">NEXT ROUND ACCESS</p><h2 id="roundWaitHeading">30-minute round wait</h2><p id="roundWaitDescription" class="muted">Loading round wait setting…</p></div>
-        <div class="flash-timer-action"><strong id="roundWaitStatus">LOADING</strong><button id="roundWaitToggle" class="button-secondary" type="button" disabled>LOADING</button></div>
-      </section>
 
       <section class="stats-grid" aria-label="Event summary">
         <article class="stat-card"><span>TEAMS</span><strong id="teamCount">0</strong></article>
@@ -56,12 +77,28 @@
 
       <div class="content-grid">
         <section class="panel team-panel">
-          <div class="panel-heading"><div><p class="eyebrow">LIVE STANDINGS</p><h2>Leaderboard and balances</h2></div><button id="refreshButton" class="button-secondary" type="button">REFRESH</button></div>
-          <div class="team-filter-bar"><label for="industryFilter">FILTER TEAMS AND BALANCES BY INDUSTRY</label><select id="industryFilter" aria-label="Filter teams by industry"><option value="">All industries</option></select></div>
+          <div class="panel-heading"><div><p class="eyebrow">TEAMS</p><h2>Teams, progress and balances</h2></div>
+            <div class="control-row tight"><button id="addTeamsButton" class="button-primary" type="button">+ ADD TEAMS</button><button id="exportPins" class="button-secondary" type="button">PINS CSV</button><button id="exportResults" class="button-secondary" type="button">RESULTS CSV</button><button id="refreshButton" class="button-secondary" type="button">REFRESH</button></div></div>
+          <div class="team-filter-bar">
+            <input id="teamSearch" type="search" placeholder="Search teams by name" aria-label="Search teams">
+            <select id="industryFilter" aria-label="Filter teams by industry"><option value="">All industries</option></select>
+            <select id="statusFilter" aria-label="Filter teams by status">
+              <option value="">Every team</option>
+              <option value="online">Online now</option>
+              <option value="offline">Offline</option>
+              <option value="reading">Reading the flash</option>
+              <option value="not-submitted">Not submitted this round</option>
+              <option value="submitted">Submitted this round</option>
+              <option value="alerts">Has alerts</option>
+              <option value="no-industry">No industry yet</option>
+              <option value="out">Disqualified</option>
+            </select>
+            <span id="teamFilterCount" class="muted small"></span>
+          </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>#</th><th>TEAM</th><th>INDUSTRY</th><th>ROUND</th><th>BALANCE</th><th>STATUS</th><th>SET BALANCE</th></tr></thead>
-              <tbody id="teamsBody"><tr><td colspan="7" class="empty">Waiting for teams to connect…</td></tr></tbody>
+              <thead><tr><th>#</th><th>TEAM</th><th>INDUSTRY</th><th>ROUND</th><th>FLASH</th><th>DATA</th><th>BALANCE</th><th>STATUS</th><th>ALERTS</th><th></th></tr></thead>
+              <tbody id="teamsBody"><tr><td colspan="10" class="empty">No teams yet. Use + Add teams to create them.</td></tr></tbody>
             </table>
           </div>
         </section>
@@ -73,6 +110,7 @@
               <option value="alerts">All alerts</option>
               <option value="screenshots">Screenshots only</option>
               <option value="focus">Tab switches and returns</option>
+              <option value="organizer">Organizer actions</option>
               <option value="all">All activity</option>
             </select>
             <select id="activityIndustryFilter" aria-label="Filter alerts by industry"><option value="">All industries</option></select>
@@ -81,9 +119,74 @@
           <div id="activityFeed" class="activity-feed"><p class="empty">Waiting for activity…</p></div>
         </section>
       </div>
+      <section class="panel danger-zone">
+        <div class="panel-heading"><div><p class="eyebrow">DANGER ZONE</p><h2>Start over</h2></div></div>
+        <div class="control-row padded">
+          <button id="wipeTeams" type="button" class="button-danger">DELETE ALL TEAMS</button><span class="muted small">Removes every team and the activity log. Round settings stay.</span>
+        </div>
+        <div class="control-row padded">
+          <button id="wipeAll" type="button" class="button-danger">RESET EVERYTHING</button><span class="muted small">A brand new game: no teams, no log, rounds closed, timer off, no announcement.</span>
+        </div>
+      </section>
       <p id="dashboardMessage" class="message" role="status"></p>
-      <p class="footer-note">Balance edits apply to the team's current balance and reach their screen within five seconds. Each change is recorded in the activity log. "Reset PIN" signs the team out everywhere; the next PIN they enter becomes their new PIN. Alerts are signals for review, not proof.</p>
+      <p class="footer-note">Players cannot create teams: only teams added here can sign in. Every change reaches the team's screen within five seconds and is recorded under "Organizer actions". Alerts are signals for review, not proof.</p>
     </section>
   </main>
+
+  <dialog id="addDialog" class="admin-dialog">
+    <form method="dialog" class="dialog-body" id="addForm">
+      <div class="dialog-head"><div><p class="eyebrow">NEW TEAMS</p><h2>Add teams</h2></div><button class="button-secondary" value="cancel" formnovalidate>CLOSE</button></div>
+      <div id="addInput">
+        <label for="addLines">One team per line: <b>name</b>, then optionally a <b>PIN</b> and an <b>industry</b>, separated by commas. Leave the PIN out and a 6-digit PIN is made for you.</label>
+        <textarea id="addLines" rows="8" placeholder="Team Alpha&#10;Team Bravo, 482913&#10;Team Charlie, , Pharma"></textarea>
+        <div class="control-row"><span>Or quickly make</span><input id="bulkCount" type="number" min="1" max="200" value="50" aria-label="Number of teams"><span>teams named</span><input id="bulkPrefix" type="text" value="Team " aria-label="Name prefix"><span>01, 02, …</span><button id="bulkFill" type="button" class="button-secondary">FILL LIST</button></div>
+        <div class="control-row"><button id="addSubmit" type="button" class="button-primary">CREATE TEAMS</button></div>
+      </div>
+      <div id="addResult" hidden>
+        <p class="message good" id="addSummary"></p>
+        <div class="table-wrap result-scroll"><table><thead><tr><th>TEAM</th><th>PIN</th><th>INDUSTRY</th></tr></thead><tbody id="addResultBody"></tbody></table></div>
+        <div id="addSkipped" class="muted small"></div>
+        <div class="control-row"><button id="addDownload" type="button" class="button-primary">DOWNLOAD CSV</button><button id="addPrint" type="button" class="button-secondary">PRINT CARDS</button><button id="addMore" type="button" class="button-secondary">ADD MORE</button></div>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="teamDialog" class="admin-dialog wide">
+    <div class="dialog-body">
+      <div class="dialog-head"><div><p class="eyebrow" id="tdEyebrow">TEAM</p><h2 id="tdName">Team</h2></div><button class="button-secondary" type="button" id="tdClose">CLOSE</button></div>
+      <div class="td-facts" id="tdFacts"></div>
+      <div class="td-grid">
+        <section class="td-block">
+          <h3>Flash and round</h3>
+          <p class="muted small" id="tdFlashState"></p>
+          <div class="control-row"><button type="button" class="button-primary" data-act="reopen-flash">RE-ENABLE FLASH</button><button type="button" class="button-secondary" data-act="complete-flash">MARK FLASH AS READ</button></div>
+          <div class="control-row"><button type="button" class="button-secondary" data-act="undo-submission">UNDO LAST SUBMISSION</button><button type="button" class="button-secondary" data-act="advance">MOVE TO NEXT ROUND</button></div>
+          <div class="control-row"><label for="tdRound">Put team on round</label><select id="tdRound"><option>1</option><option>2</option><option>3</option><option>4</option></select><button type="button" class="button-secondary" data-act="set-round">APPLY</button></div>
+        </section>
+        <section class="td-block">
+          <h3>Money</h3>
+          <div class="control-row"><span>₹</span><input id="tdBalance" type="number" min="0" step="1000"><button type="button" class="button-secondary" data-act="set-balance">SET BALANCE</button></div>
+          <h3>Sign-in</h3>
+          <p class="muted small">PIN: <b id="tdPin" class="pin-text">••••••</b> <button type="button" class="link-button" id="tdShowPin">show</button></p>
+          <div class="control-row"><input id="tdNewPin" type="text" maxlength="64" placeholder="New PIN (blank = random)"><button type="button" class="button-secondary" data-act="set-pin">SET NEW PIN</button></div>
+          <div class="control-row"><button type="button" class="button-secondary" data-act="sign-out">SIGN OUT THEIR DEVICE</button></div>
+        </section>
+        <section class="td-block">
+          <h3>Team details</h3>
+          <div class="control-row"><input id="tdRename" type="text" maxlength="40" placeholder="New team name"><button type="button" class="button-secondary" data-act="rename">RENAME</button></div>
+          <div class="control-row"><select id="tdIndustry"></select><button type="button" class="button-secondary" data-act="set-industry">CHANGE INDUSTRY</button></div>
+          <div class="control-row"><input id="tdNotice" type="text" maxlength="280" placeholder="Message shown only to this team"><button type="button" class="button-secondary" data-act="notice">SEND</button><button type="button" class="button-secondary" data-act="notice-clear">CLEAR</button></div>
+          <div class="control-row"><button type="button" class="button-secondary" data-act="set-eliminated" id="tdEliminate">DISQUALIFY</button><button type="button" class="button-danger" data-act="delete">DELETE TEAM</button></div>
+        </section>
+      </div>
+      <h3 class="td-section">Rounds played</h3>
+      <div class="table-wrap"><table><thead><tr><th>ROUND</th><th>INVESTED</th><th>GOT BACK</th><th>PROFIT</th><th>SUBMITTED</th></tr></thead><tbody id="tdHistory"></tbody></table></div>
+      <h3 class="td-section">Recent activity</h3>
+      <div id="tdActivity" class="activity-feed short"></div>
+      <p id="tdMessage" class="message" role="status"></p>
+    </div>
+  </dialog>
+
+  <section id="printCards" class="print-cards" aria-hidden="true"></section>
 </body>
 </html>

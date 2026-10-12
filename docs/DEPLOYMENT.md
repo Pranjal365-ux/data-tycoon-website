@@ -113,15 +113,21 @@ python -c "import secrets; print('ops-' + secrets.token_urlsafe(18))"   # consol
 * Share the URL only with the organizing team. To change it, update `ADMIN_CONSOLE_PATH` and redeploy.
 * Organizer sign-in is rate limited (8 failed attempts per IP per minute, 40 overall per 5 minutes).
 * **One device per team.** Signing in on a new device signs the team's previous device out (it shows a message explaining why). A wrong PIN never signs anyone out.
-* **Reset PIN** signs out every device of that team. The next PIN the team enters becomes their new PIN, so ask the team to sign in right away.
+* **Teams are created only in the console** (+ Add teams). Players cannot create teams or choose their own PIN. PINs are generated (6 digits) unless you type one; download them as CSV or print one card per team. PINS CSV re-downloads every team's current PIN at any time.
+* **Set new PIN** (Manage dialog) replaces a team's PIN and signs out their device.
+* **Rounds.** Nothing is open until you press Start Round 1. Open each later round yourself, or schedule it to open automatically in N minutes (players see the countdown). "Wait after a team submits" adds an optional minimum gap per team. Pause stops flashes, submissions and advancing for everyone.
+* **Flash once.** Each round's flash can be opened once. It ends when the team closes it or when the timer runs out, even if their laptop died meanwhile. Use Manage > Re-enable flash to give a team one more viewing (fresh timer), or Mark flash as read to unlock their data without it.
+* **Manage dialog** (click a team name): balance, PIN, sign out device, re-enable or complete the flash, undo the last submission, move to the next round or any round, rename, change industry (seat counts follow), private message, disqualify or reinstate, delete. Every action is logged under "Organizer actions".
+* **Danger zone:** Delete all teams (type DELETE TEAMS) or Reset everything (type RESET) for a brand new game.
 
 ## Before the event checklist
 
-1. Upgrade the database tier and set all environment variables on the production host.
-2. Clear test data: `MONGODB_URI=... python scripts/reset_event_data.py --yes` (otherwise old test teams use up industry seats).
-3. Open the console, set the flash timer and the round wait the way you want them.
-4. Do a dry run with two or three phones and laptops (Windows, macOS, Android, iOS).
-5. Keep the console open during the event to watch alerts.
+1. Set all environment variables on the production host (including `ADMIN_CONSOLE_PATH`) and redeploy.
+2. In the console, press Reset everything (type RESET) to remove test data.
+3. Add the real teams (+ Add teams, or "Quickly make 50 teams"), then print the PIN cards or download the CSV.
+4. Set the flash timer and the wait after submitting. Leave the rounds closed until you are ready.
+5. Do a dry run with two or three laptops (Windows and macOS), then Reset everything again and re-add teams.
+6. On the day: teams sign in and choose an industry, then press Start Round 1. Keep the console open to watch progress and alerts.
 
 ## Changing the flashes
 

@@ -103,4 +103,7 @@ export function hideFlash() {
   resizeObserver?.disconnect();
   resizeObserver = null;
   pageContainer()?.replaceChildren();
+  // A flash is seen once: drop every decoded page so nothing stays in memory.
+  bitmapCache.forEach(entry => entry.then(bitmap => bitmap.close?.()).catch(() => {}));
+  bitmapCache.clear();
 }

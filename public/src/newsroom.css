@@ -251,7 +251,8 @@ td { padding: 12px 10px; }
 .flash-page-status button { margin-left: 8px; padding: 6px 10px; font-size: 12px; }
 .screen-locked { font: 600 14px "Libre Baskerville", Georgia, serif; letter-spacing: 0; color: var(--red); }
 .flash-finish-button { font-size: 14px; padding: 14px 28px; }
-.flash-shield { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: #111; color: #f5eedf; text-align: center; font: 700 20px "Libre Baskerville", Georgia, serif; }
+.flash-shield { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: #111; color: #f5eedf; text-align: center; font: 700 20px "Libre Baskerville", Georgia, serif; visibility: hidden; transition: none; contain: strict; }
+.flash-shield.on { visibility: visible; }
 .flash-leave { position: fixed; inset: 0; z-index: 1001; display: grid; place-items: center; padding: 20px; background: rgba(17, 17, 17, 0.96); }
 .flash-leave-card { max-width: 480px; background: var(--paper); border: 6px double var(--ink); padding: 30px; text-align: center; }
 .flash-leave-card h2 { font: 700 32px "Playfair Display", Georgia, serif; margin: 10px 0 12px; color: var(--red); }
@@ -411,3 +412,20 @@ body.flash-open { overflow: hidden; }
 /* Notifications at the top so they never cover the investment bar or buttons */
 .toasts { top: 16px; bottom: auto; }
 .toast.leaving { transform: translateY(-8px); }
+
+/* Organizer notices, paused state and round-not-started card */
+.press-notice { display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; align-items: baseline; margin: 0 0 18px; padding: 14px 18px; border: 2px solid var(--ink); border-left-width: 8px; background: var(--paper); }
+.press-notice p { margin: 0; font-size: 16px; line-height: 1.6; }
+.press-notice-label { font: 700 12px "DM Mono", ui-monospace, monospace; letter-spacing: 0.12em; text-transform: uppercase; color: var(--red); white-space: nowrap; }
+.press-notice.paused { border-color: var(--red); background: #fbeee9; }
+.press-notice.team { border-style: double; border-width: 4px 4px 4px 8px; }
+@media (max-width: 640px) { .press-notice { grid-template-columns: 1fr; } }
+.round-closed { text-align: center; padding: 34px 24px; }
+.round-closed h3 { font: 700 28px "Playfair Display", Georgia, serif; margin: 8px 0 10px; }
+.round-closed p { max-width: 560px; margin: 0 auto; font-size: 16px; line-height: 1.7; }
+
+/* Leaderboard podium badges (typeset, no emoji) */
+.medal { display: inline-block; min-width: 44px; padding: 3px 8px; border: 2px solid var(--ink); font: 700 13px "DM Mono", ui-monospace, monospace; letter-spacing: 0.06em; text-align: center; text-transform: uppercase; }
+.medal-1 { background: var(--ink); color: var(--paper); }
+.medal-2 { border-style: double; border-width: 4px; padding: 1px 6px; }
+.medal-3 { border-style: dashed; }

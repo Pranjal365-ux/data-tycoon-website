@@ -8,12 +8,12 @@
   <title>The Daily Data | Data Tycoon</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
   <link rel="preload" href="./fonts/libre-baskerville-normal-400.woff2" as="font" type="font/woff2" crossorigin />
-  <link rel="stylesheet" href="./src/fonts.css?v=70" />
-  <link rel="stylesheet" href="./src/styles.css?v=70" />
-  <link rel="stylesheet" href="./src/editorial.css?v=70" />
-  <link rel="stylesheet" href="./src/gameflow.css?v=70" />
-  <link rel="stylesheet" href="./src/newsroom.css?v=70" />
-  <script type="module" src="./src/app.js?v=70"></script>
+  <link rel="stylesheet" href="./src/fonts.css?v=80" />
+  <link rel="stylesheet" href="./src/styles.css?v=80" />
+  <link rel="stylesheet" href="./src/editorial.css?v=80" />
+  <link rel="stylesheet" href="./src/gameflow.css?v=80" />
+  <link rel="stylesheet" href="./src/newsroom.css?v=80" />
+  <script type="module" src="./src/app.js?v=80"></script>
 </head>
 <body>
   <div class="paper-frame" id="appRoot">
@@ -39,10 +39,10 @@
     <section class="news-paper flash-document-paper">
       <div class="flash-bar"><span id="flashTitle">News flash</span><span id="flashHint">Time left</span><span id="flashTimer" aria-live="off">05:00</span></div>
       <div class="flash-document-frame" role="document" aria-label="Round flash document"><div id="flashPages" class="flash-pages"></div></div>
-      <div id="flashTimerNotice" class="screen-locked">This flash stays open for 5 minutes and closes by itself.</div>
+      <div id="flashTimerNotice" class="screen-locked">Once you close the flash, it cannot be opened again.</div>
       <button id="flashClose" class="flash-finish-button" type="button" data-action="close-flash">Done reading</button>
     </section>
-    <div id="flashShield" class="flash-shield" hidden><p id="flashShieldText">Flash hidden</p></div>
+    <div id="flashShield" class="flash-shield" aria-hidden="true"><p id="flashShieldText">Flash hidden</p></div>
     <div id="flashLeaveCard" class="flash-leave" hidden role="alertdialog" aria-labelledby="flashLeaveTitle">
       <div class="flash-leave-card">
         <span class="article-label">Heads up</span>

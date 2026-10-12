@@ -170,6 +170,18 @@ function waitRemaining() {
   return team ? remaining(team.roundWaitRemainingMs) : 0;
 }
 
+function scheduleRemaining() {
+  return team?.scheduledRound ? remaining(team.scheduledInMs) : 0;
+}
+
+function flashMinutes() {
+  return team?.settings.flashTimer.minutes || 5;
+}
+
+function minutesLabel(value) {
+  return `${value} minute${value === 1 ? "" : "s"}`;
+}
+
 function flashRemaining() {
   if (!team?.activeFlash || !team.settings.flashTimer.enabled || team.flashCompleted) return 0;
   return remaining(team.activeFlash.remainingMs);
@@ -185,7 +197,11 @@ function stage() {
   if (!team) return "login";
   if (!team.industry) return "industry";
   if (team.finished) return "finished";
-  if (team.submitted) return waitRemaining() > 0 ? "waiting" : "next-open";
+  if (team.submitted) {
+    if (!team.nextRoundOpen) return "next-closed";
+    return waitRemaining() > 0 ? "waiting" : "next-open";
+  }
+  if (!team.roundOpen) return "not-started";
   if (!team.flashCompleted) return "flash";
   if (!team.datasetDownloaded) return "dataset";
   return "invest";
@@ -213,12 +229,17 @@ function applyState(next) {
   if (previous && next.moneyRevision > previous.moneyRevision) {
     toast(`An organizer updated your balance to ${money(next.companyValue)}.`, "info");
   }
+  const note = next.settings.announcement;
+  if (previous && note.text && note.at !== previous.settings.announcement.at) toast(`From the organizers: ${note.text}`, "info");
+  if (previous && next.notice?.text && next.notice.at !== previous.notice?.at) toast(`Message for your team: ${next.notice.text}`, "info");
+  if (previous && !previous.roundOpen && next.roundOpen && !next.submitted) toast(`Round ${next.round} has started. Open the news flash.`, "good");
+  if (previous && !previous.nextRoundOpen && next.nextRoundOpen && next.submitted && !next.finished) toast(`Round ${next.round + 1} is now open.`, "good");
   if (!viewAllowed(ui.view)) ui.view = defaultView();
   else if (previous && next.round > previous.round) ui.view = "round";
   else if (previous && !previous.submitted && next.submitted) ui.view = "results";
   ui.waitOpen = waitRemaining() === 0;
   syncFlash();
-  const signature = JSON.stringify({ ...next, serverNow: 0, roundWaitRemainingMs: next.roundWaitRemainingMs > 0, activeFlash: next.activeFlash ? next.activeFlash.round : null });
+  const signature = JSON.stringify({ ...next, serverNow: 0, roundWaitRemainingMs: next.roundWaitRemainingMs > 0, scheduledInMs: next.scheduledInMs > 0, activeFlash: next.activeFlash ? next.activeFlash.round : null });
   if (signature !== lastSignature) {
     lastSignature = signature;
     requestRender();
@@ -264,7 +285,7 @@ function render() {
   const scrollY = window.scrollY;
   const previousView = page.dataset.view;
   page.dataset.view = ui.view;
-  page.innerHTML = `${signedIn ? renderNextStep() : ""}${(views[ui.view] || renderLogin)()}`;
+  page.innerHTML = `${signedIn ? renderNotices() + renderNextStep() : ""}${(views[ui.view] || renderLogin)()}`;
   if (ui.view === "round") restoreDraft();
   if (previousView === ui.view) window.scrollTo(0, scrollY);
   tick();
@@ -295,8 +316,8 @@ function renderStatusStrip() {
   });
   const rank = myRank();
   if (rank && rank.rank > 5) items.push(`<span class="ticker-me"><b>${rank.rank}. ${esc(team.teamId)}</b> ${money(team.companyValue)}</span>`);
-  items.push(`<span>Flash timer: <b>${team.settings.flashTimer.enabled ? "On (5 min)" : "Off"}</b></span>`);
-  items.push(`<span>Wait between rounds: <b>${team.settings.roundWait.enabled ? "On (30 min)" : "Off"}</b></span>`);
+  if (team.settings.announcement.text) items.push(`<span>From the organizers: <b>${esc(team.settings.announcement.text)}</b></span>`);
+  items.push(`<span>Flash timer: <b>${team.settings.flashTimer.enabled ? `On (${flashMinutes()} min)` : "Off"}</b></span>`);
   const html = items.join('<i aria-hidden="true">◆</i>');
   const track = $("#statusText");
   if (track.dataset.html === html) return;
@@ -319,7 +340,7 @@ function deskTab({ view, number, title, detail, state, disabledReason }) {
   const current = ui.view === view;
   const disabled = Boolean(disabledReason);
   return `<button type="button" class="desk-tab ${state} ${current ? "current" : ""}" data-action="nav" data-view="${view}" ${disabled ? `disabled title="${esc(disabledReason)}"` : ""} ${current ? 'aria-current="page"' : ""}>
-    <span class="desk-tab-number" aria-hidden="true">${state === "done" ? "✓" : disabled ? "🔒" : number}</span>
+    <span class="desk-tab-number" aria-hidden="true">${state === "done" ? "✓" : number}</span>
     <span class="desk-tab-text"><strong>${esc(title)}</strong><small>${esc(disabled ? disabledReason : detail)}</small></span>
   </button>`;
 }
@@ -328,7 +349,7 @@ function renderSteps() {
   const s = stage();
   const roundDetail = {
     flash: "Next: read the flash", dataset: "Next: get the data", invest: "Next: invest",
-    waiting: "Submitted", "next-open": "Next round is open", finished: "All rounds done"
+    waiting: "Submitted", "next-open": "Next round is open", "next-closed": "Submitted", "not-started": "Starts soon", finished: "All rounds done"
   }[s] || "";
   const latest = team.history.at(-1);
   return `<div class="desk-tabs-inner">
@@ -339,19 +360,36 @@ function renderSteps() {
   </div>`;
 }
 
+function renderNotices() {
+  const parts = [];
+  if (team.paused) parts.push(`<section class="press-notice paused" role="status"><span class="press-notice-label">Game paused</span><p>The organizers have paused the game. Everything is saved. Please wait for them to resume.</p></section>`);
+  const note = team.settings.announcement;
+  if (note.text) parts.push(`<section class="press-notice" role="status"><span class="press-notice-label">From the organizers</span><p>${esc(note.text)}</p></section>`);
+  if (team.notice?.text) parts.push(`<section class="press-notice team" role="status"><span class="press-notice-label">Message for ${esc(team.teamId)}</span><p>${esc(team.notice.text)}</p></section>`);
+  return parts.join("");
+}
+
+function nextRoundText(r) {
+  return team.scheduledRound === r
+    ? `Round ${r} opens in <b data-countdown="schedule">${formatDuration(scheduleRemaining())}</b>.`
+    : `Round ${r} opens when the organizers start it.`;
+}
+
 function renderNextStep() {
   const s = stage();
   const r = team.round;
   // Only point somewhere else: if this page already shows the next action, skip the bulletin.
   const shownHere = (ui.view === "industry" && s === "industry")
-    || (ui.view === "round" && ["flash", "dataset", "invest"].includes(s))
-    || (ui.view === "results" && ["waiting", "next-open", "finished"].includes(s));
+    || (ui.view === "round" && ["flash", "dataset", "invest", "not-started"].includes(s))
+    || (ui.view === "results" && ["waiting", "next-open", "next-closed", "finished"].includes(s));
   if (shownHere) return "";
   const items = {
     industry: ["Choose your industry", "Pick one of the five industries below and confirm it. You keep it for all four rounds.", null],
-    flash: [`Read the Round ${r} news flash`, "Read it with your team. The data file unlocks when you finish.", ["Open the flash", "open-flash"]],
+    "not-started": [`Round ${r} starts soon`, `${nextRoundText(r)} This page updates by itself.`, ui.view === "round" ? null : [`Go to Round ${r}`, "nav", "round"]],
+    flash: [`Read the Round ${r} news flash`, "Read it together with your team: it can only be opened once. The data file unlocks when you finish.", ui.view === "round" ? null : [`Go to Round ${r}`, "nav", "round"]],
     dataset: [`Download the Round ${r} data`, "Use it to decide where to invest.", ["Download data", "download-dataset"]],
     invest: [`Invest ${money(team.budget)}`, `Split it across the ten areas below (at least ${money(team.minAllocation)} each), then submit.`, ui.view === "round" ? ["Go to the table", "scroll-to-allocation"] : [`Go to Round ${r}`, "nav", "round"]],
+    "next-closed": [`Round ${r} submitted`, `${nextRoundText(r + 1)} This page updates by itself.`, ui.view === "results" ? null : ["See results", "nav", "results"]],
     waiting: [`Round ${r} submitted`, `Round ${r + 1} opens in <b data-countdown="wait">${formatDuration(waitRemaining())}</b>. This page updates on its own.`, ui.view === "results" ? null : ["See results", "nav", "results"]],
     "next-open": [`Round ${r + 1} is open`, "Start whenever your team is ready.", [`Start Round ${r + 1}`, "advance"]],
     finished: [team.isEliminated ? "Your team is out of the game" : "You've finished all four rounds", "See where your team ranks.", ui.view === "leaderboard" ? null : ["See leaderboard", "nav", "leaderboard"]]
@@ -392,8 +430,8 @@ function renderLogin() {
       <label for="teamId">Team name</label>
       <input class="text-input" id="teamId" name="teamId" required minlength="2" maxlength="40" autocomplete="username" placeholder="e.g. Team Alpha" value="${esc(session?.teamId || lastTeamName())}">
       <label for="pin">Team PIN</label>
-      <input class="text-input" id="pin" name="pin" type="password" required minlength="4" maxlength="64" autocomplete="current-password" placeholder="4 or more characters">
-      <small>New team? Your first sign-in creates the team and sets this PIN.</small>
+      <input class="text-input" id="pin" name="pin" type="password" required minlength="4" maxlength="64" autocomplete="current-password" placeholder="From your team card">
+      <small>Use the team name and PIN on the card the organizers gave you.</small>
       <small>One laptop per team. Signing in somewhere else signs this one out. Your progress is saved.</small>
       ${ui.loginError ? `<p class="form-error" role="alert">${esc(ui.loginError)}</p>` : ""}
       <button type="submit">Sign in</button>
@@ -483,7 +521,7 @@ function renderRound() {
   const dataDone = team.datasetDownloaded;
   const canInvest = flashDone && dataDone && !team.submitted && !team.finished;
   const timerOn = team.settings.flashTimer.enabled;
-  const waitOn = team.settings.roundWait.enabled;
+  const waitMinutes = team.settings.waitMinutes;
   const fileType = team.datasetName.split(".").pop().toUpperCase();
   const budgetNote = team.bonus
     ? `${money(team.budget - team.bonus)} + ${money(team.bonus)} bonus`
@@ -496,18 +534,26 @@ function renderRound() {
   <div class="market-tape">
     <div><small>Money to invest</small><b class="tape-budget">${money(team.budget)}</b><em>${budgetNote}</em></div>
     <div><small>Your rank</small><b class="tape-rank">${rank ? `#${rank.rank}` : "…"}</b><em>${rank ? `of ${rank.total} team${rank.total === 1 ? "" : "s"}` : "Loading"}</em></div>
-    <div><small>Flash timer</small><b>${timerOn ? "On" : "Off"}</b><em>${timerOn ? "Locked open for 5 minutes" : "Close it when you're done"}</em></div>
-    <div><small>Wait between rounds</small><b>${waitOn ? "30 minutes" : "None"}</b><em>${waitOn ? "After you submit" : "Next round opens at once"}</em></div>
+    <div><small>Flash timer</small><b>${timerOn ? minutesLabel(flashMinutes()) : "Off"}</b><em>${timerOn ? "Then it closes for good" : "Close it when you're done"}</em></div>
+    <div><small>Wait after you submit</small><b>${waitMinutes ? minutesLabel(waitMinutes) : "None"}</b><em>Next round starts when organizers open it</em></div>
   </div>`;
   if (team.finished) {
     return `${head}<section class="analysis-card notice-card"><h3>${team.isEliminated ? "Your team is out of the game" : "All four rounds complete"}</h3><p>${team.isEliminated ? "More than 80% of a round's money went into an area that returns nothing, so your team was disqualified." : `You finished with ${money(team.companyValue)}.`}</p><button type="button" data-action="nav" data-view="leaderboard">See leaderboard</button></section>${team.history.length ? companyValueChart() : ""}`;
   }
+  if (s === "not-started") {
+    return `${head}<section class="analysis-card notice-card round-closed" role="status"><span class="article-label">Please wait</span><h3>Round ${team.round} has not started yet</h3><p>${nextRoundText(team.round)} The news flash, data and investment table appear here as soon as it starts. No need to refresh.</p></section>${team.history.length ? companyValueChart() : ""}`;
+  }
   const tooSmall = team.budget < team.minAllocation * team.parameters.length;
+  const reading = team.activeFlash && !flashDone;
   return `${head}
   <section class="flash-callout desk-section ${flashDone ? "done" : ""}">
     ${stepHeader(1, "Read the news flash", flashDone, s === "flash")}
-    <p>${flashDone ? "Done. You can open it again any time before you submit." : timerOn ? "It stays open for 5 minutes, then closes by itself and unlocks the data." : "Read it with your team, then close it to unlock the data."}</p>
-    <button type="button" class="${flashDone ? "ghost" : "primary-red"}" data-action="open-flash" ${team.submitted ? "disabled" : ""}>${flashDone ? "Read it again" : "Open the flash"}</button>
+    <p>${flashDone
+      ? "Done. Each flash can only be read once, so it is now closed."
+      : timerOn
+        ? `<b>You can open it only once.</b> It stays open for ${minutesLabel(flashMinutes())}, then closes for good and unlocks the data. Gather your team before you open it.`
+        : "<b>You can open it only once.</b> Read it together, then close it to unlock the data. Once closed, it cannot be opened again."}</p>
+    ${flashDone ? "" : `<button type="button" class="primary-red" data-action="open-flash" ${team.submitted || team.paused ? "disabled" : ""}>${reading ? "Continue reading" : "Open the flash"}</button>`}
   </section>
   <section class="analysis-card dataset-callout desk-section ${flashDone ? "" : "locked"}">
     ${stepHeader(2, "Download the data", dataDone, s === "dataset")}
@@ -538,7 +584,7 @@ function renderAllocation(enabled, current) {
         <div><span>Left to invest</span><b id="allocRemaining">${money(team.budget)}</b></div>
       </div>
       <div class="alloc-submit-row">
-        <div id="allocMessage" class="total invalid">${enabled ? "" : !team.flashCompleted ? "🔒 Read the news flash first (Step 1)." : `🔒 Download the Round ${team.round} data first (Step 2).`}</div>
+        <div id="allocMessage" class="total invalid">${enabled ? "" : !team.flashCompleted ? "Read the news flash first (Step 1)." : `Download the Round ${team.round} data first (Step 2).`}</div>
         <button type="button" id="submitRound" class="submit-round" data-action="submit-round" disabled>Submit Round ${team.round}</button>
       </div>
     </div>
@@ -600,6 +646,10 @@ function renderResults() {
     next = `<p class="round-wait-message" role="status">Round ${team.round + 1} opens in <span data-countdown="wait">${formatDuration(waitRemaining())}</span></p>
       <p class="wait-note">Stay on this page. The button unlocks by itself, no need to refresh.</p>
       <button type="button" class="advance" disabled>Waiting for Round ${team.round + 1}</button>`;
+  } else if (s === "next-closed") {
+    next = `<p class="round-wait-message" role="status">${nextRoundText(team.round + 1)}</p>
+      <p class="wait-note">Stay on this page. The button unlocks by itself, no need to refresh.</p>
+      <button type="button" class="advance" disabled>Waiting for Round ${team.round + 1}</button>`;
   } else if (s === "next-open") {
     next = `<p class="round-wait-message" role="status">Round ${team.round + 1} is open.</p>
       <button type="button" class="advance" data-action="advance">Start Round ${team.round + 1}</button>`;
@@ -632,8 +682,8 @@ function renderLeaderboard() {
     : !rows.length ? `<tr><td colspan="5" class="empty-cell">No teams yet.</td></tr>`
     : rows.map((row, index) => {
       const me = team && row.teamId.toLowerCase() === team.teamId.toLowerCase();
-      const badge = index === 0 ? "🥇 1st" : index === 1 ? "🥈 2nd" : index === 2 ? "🥉 3rd" : `#${index + 1}`;
-      return `<tr class="${me ? "me" : ""}"><td class="rank-cell"><b>${badge}</b></td><td><b>${esc(row.teamId)}</b>${me ? ' <span class="you">You</span>' : ""}</td><td>${esc(row.industry || "-")}</td><td>${row.isEliminated ? "Out" : `Round ${row.round}`}</td><td class="balance">${money(row.companyValue)}</td></tr>`;
+      const badge = index < 3 ? `<span class="medal medal-${index + 1}">${["1st", "2nd", "3rd"][index]}</span>` : `<b>#${index + 1}</b>`;
+      return `<tr class="${me ? "me" : ""}"><td class="rank-cell">${badge}</td><td><b>${esc(row.teamId)}</b>${me ? ' <span class="you">You</span>' : ""}</td><td>${esc(row.industry || "-")}</td><td>${row.isEliminated ? "Out" : `Round ${row.round}`}</td><td class="balance">${money(row.companyValue)}</td></tr>`;
     }).join("");
   const leader = rows?.[0];
   const rank = myRank();
@@ -774,21 +824,25 @@ function updateFlashControls() {
   $("#flashTimerNotice").textContent = team.flashCompleted
     ? "You've already finished this flash. Close it when you're ready."
     : timerOn
-      ? locked ? "This flash stays open for 5 minutes and closes by itself." : "Time's up. Taking you back to the round…"
-      : "Close the flash when your team has finished reading.";
+      ? locked ? `This flash stays open for ${minutesLabel(flashMinutes())}, then closes for good.` : "Time's up. Taking you back to the round…"
+      : "Once you close the flash, it cannot be opened again.";
   const close = $("#flashClose");
   close.hidden = timerOn && !team.flashCompleted;
   close.disabled = locked || flashClosing;
-  close.textContent = team.flashCompleted ? "Close" : "Done reading";
+  close.textContent = team.flashCompleted ? "Close" : "Done reading (closes for good)";
   if (!locked && timerOn && !team.flashCompleted && !flashClosing && team.activeFlash && Date.now() >= flashRetryAt) closeFlash(true);
 }
 
 async function closeFlash(automatic = false) {
   if (flashClosing) return;
+  if (!automatic && !team.flashCompleted) {
+    const ok = await confirmAction("Finished reading?", "The flash closes for good. Your team cannot open it again.", "Close the flash");
+    if (!ok) return;
+  }
   flashClosing = true;
   try {
     applyState(await api("/team/flash/close", { method: "POST" }));
-    if (!automatic || team.flashCompleted) toast("Flash finished. You can download the data now.", "good");
+    if (!automatic || team.flashCompleted) toast("Flash closed. You can download the data now.", "good");
   } catch (error) {
     flashRetryAt = Date.now() + 3000;
     if (error.payload?.remainingMs) {
@@ -880,7 +934,7 @@ async function chooseIndustry(button, industry) {
     applyState(await api("/team/industry", { method: "POST", body: { industry } }));
     ui.view = "round";
     render();
-    toast(`${industry} is locked in. Round 1 is ready.`, "good");
+    toast(team.roundOpen ? `${industry} is locked in. Round ${team.round} is ready.` : `${industry} is locked in. Round ${team.round} starts when the organizers open it.`, "good");
   });
 }
 
@@ -1010,6 +1064,9 @@ function tick() {
     render();
     return;
   }
+  const scheduled = scheduleRemaining();
+  document.querySelectorAll('[data-countdown="schedule"]').forEach(el => { el.textContent = formatDuration(scheduled); });
+  if (team.scheduledRound && scheduled === 0 && !polling && Date.now() - receivedAt > 1500) poll();
   if (flashVisible) updateFlashControls();
   const age = document.querySelector("[data-leaderboard-age]");
   if (age && ui.leaderboardAt) {

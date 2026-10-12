@@ -9,9 +9,10 @@ submits, and advances. One organizer console polls the dashboard every 3 s.
     python tests/load/load_test.py --base http://127.0.0.1:8000 --teams 50 \
         --console ops-... --password ...
 
-The organizer settings are switched to "timer off" and "no round wait" for the
-run so the full game fits in a few minutes; the request rate per team is the
-same as during the event.
+The teams are created through the organizer API first (players cannot create
+teams), and the organizer settings are switched to "timer off", "all rounds
+open" and "no wait" for the run so the full game fits in a few minutes; the
+request rate per team is the same as during the event.
 """
 
 from __future__ import annotations
@@ -136,9 +137,13 @@ async def main():
     async with httpx.AsyncClient(base_url=args.base, timeout=30) as client:
         login = await client.post("/api/admin/login", json={"password": args.password}, headers={"X-Console-Key": args.console})
         admin = {"X-Console-Key": args.console, "Authorization": f"Bearer {login.json()['token']}"}
-        await client.patch("/api/admin/settings", json={"flashTimer": False, "roundWait": False}, headers=admin)
+        await client.patch("/api/admin/settings", json={"flashTimer": False, "openRound": 4, "waitMinutes": 0, "paused": False}, headers=admin)
+        run = format(int(time.time()) % 100000, "05d")
+        teams = [{"teamId": f"Load {run} {i:03d}", "pin": "4321"} for i in range(args.teams)]
+        for start in range(0, len(teams), 100):
+            created = await client.post("/api/admin/teams", json={"teams": teams[start:start + 100]}, headers=admin, timeout=120)
+            created.raise_for_status()
 
-    run = format(int(time.time()) % 100000, "05d")
     results: list[bool] = []
     stop = asyncio.Event()
     console_task = asyncio.create_task(organizer(args.base, args.console, args.password, stop))

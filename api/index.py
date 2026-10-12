@@ -13,8 +13,10 @@ authorized callers.
 from __future__ import annotations
 
 import base64
+import csv
 import hashlib
 import hmac
+import io
 import ipaddress
 import json
 import math
@@ -29,7 +31,7 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urlencode
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from pymongo import ASCENDING, DESCENDING, MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError, OperationFailure, PyMongoError
 
@@ -204,16 +206,45 @@ def team_key(team_id: str) -> str:
     return clean_text(team_id, 80).casefold()
 
 
+SETTING_IDS = ["flash-timer", "round-control", "announcement"]
+
+
 def settings() -> dict:
+    """Organizer settings. Round state is resolved on every call so a scheduled
+    round opens on time even while the stored copy is cached."""
     def load():
-        rows = {row["_id"]: row for row in db().data_tycoon_settings.find({"_id": {"$in": ["flash-timer", "round-wait"]}})}
+        rows = {row["_id"]: row for row in db().data_tycoon_settings.find({"_id": {"$in": SETTING_IDS}})}
         flash = rows.get("flash-timer", {})
-        wait = rows.get("round-wait", {})
+        control = rows.get("round-control", {})
+        note = rows.get("announcement", {})
         return {
-            "flashTimer": {"enabled": bool(flash.get("enabled", False)), "changedAt": int(flash.get("changedAt", 0))},
-            "roundWait": {"enabled": bool(wait.get("enabled", True)), "changedAt": int(wait.get("changedAt", 0))},
+            "flashTimer": {
+                "enabled": bool(flash.get("enabled", False)),
+                "changedAt": int(flash.get("changedAt", 0)),
+                "minutes": int(flash.get("minutes", rules.FLASH_DURATION_MS // 60000) or 5),
+            },
+            "rounds": {
+                "open": int(control.get("openRound", 0) or 0),
+                "scheduledRound": int(control.get("scheduledRound", 0) or 0),
+                "scheduledAt": int(control.get("scheduledAt", 0) or 0),
+                "waitMinutes": int(control.get("waitMinutes", 0) or 0),
+                "paused": bool(control.get("paused", False)),
+                "openedAt": {str(k): int(v) for k, v in (control.get("openedAt") or {}).items()},
+            },
+            "announcement": {"text": str(note.get("text", "")), "at": int(note.get("at", 0) or 0)},
         }
-    return cached("settings", SETTINGS_CACHE_SECONDS, load)
+    stored = cached("settings", SETTINGS_CACHE_SECONDS, load)
+    rounds = dict(stored["rounds"])
+    if rounds["scheduledRound"] and now_ms() >= rounds["scheduledAt"]:
+        if rounds["scheduledRound"] > rounds["open"]:
+            rounds["openedAt"] = {**rounds["openedAt"], str(rounds["scheduledRound"]): rounds["scheduledAt"]}
+        rounds["open"] = max(rounds["open"], rounds["scheduledRound"])
+        rounds["scheduledRound"], rounds["scheduledAt"] = 0, 0
+    return {**stored, "rounds": rounds}
+
+
+def flash_duration_ms(timer: dict) -> int:
+    return max(1, int(timer.get("minutes", 5))) * 60_000
 
 
 def industry_capacity() -> list[dict]:
@@ -489,7 +520,20 @@ def flash_remaining_ms(team: dict, timer: dict, now: int) -> int:
     if not active or not timer["enabled"]:
         return 0
     started = max(int(active.get("startedAt", 0) or 0), int(timer["changedAt"]))
-    return max(0, started + rules.FLASH_DURATION_MS - now)
+    return max(0, started + flash_duration_ms(timer) - now)
+
+
+def flash_expired(team: dict, timer: dict, now: int, grace: int = 0) -> bool:
+    """True once a timed flash has run out (the flash can only be seen once)."""
+    active = team.get("activeFlash") or {}
+    if not active or not timer["enabled"]:
+        return False
+    started = max(int(active.get("startedAt", 0) or 0), int(timer["changedAt"]))
+    return now >= started + flash_duration_ms(timer) + grace
+
+
+def last_submitted_at(history: list[dict], round_number: int) -> int:
+    return next((item["submittedAt"] for item in history if item["round"] == round_number), 0)
 
 
 def flash_pages(round_number: int) -> int:
@@ -512,7 +556,13 @@ def team_view(team: dict, include_capacity: bool = False) -> dict:
     active = team.get("activeFlash") if isinstance(team.get("activeFlash"), dict) else None
     if active and "round" not in active and str(active.get("id", "")).startswith("flash-"):
         active = {"round": int(str(active["id"]).split("-")[1]), "startedAt": active.get("startedAt", 0)}
-    wait_until = int(team.get("roundWaitUntil", 0) or 0)
+    rounds = current["rounds"]
+    wait_ms = rounds["waitMinutes"] * 60_000
+    wait_left = 0
+    if submitted and not finished and wait_ms:
+        wait_left = max(0, last_submitted_at(history, round_number) + wait_ms - now)
+    scheduled = rounds["scheduledRound"]
+    notice = team.get("notice") if isinstance(team.get("notice"), dict) else {}
     view = {
         "teamId": team.get("teamId", ""),
         "industry": industry,
@@ -536,8 +586,18 @@ def team_view(team: dict, include_capacity: bool = False) -> dict:
         "submitted": submitted,
         "finished": finished,
         "isEliminated": bool(team.get("isEliminated")),
-        "roundWaitRemainingMs": max(0, wait_until - now) if current["roundWait"]["enabled"] and submitted and not finished else 0,
-        "settings": current,
+        "roundOpen": round_number <= rounds["open"],
+        "nextRoundOpen": round_number + 1 <= rounds["open"],
+        "scheduledRound": scheduled,
+        "scheduledInMs": max(0, rounds["scheduledAt"] - now) if scheduled else 0,
+        "paused": rounds["paused"],
+        "roundWaitRemainingMs": wait_left,
+        "notice": {"text": str(notice.get("text", "")), "at": int(notice.get("at", 0) or 0)} if notice.get("text") else None,
+        "settings": {
+            "flashTimer": current["flashTimer"],
+            "waitMinutes": rounds["waitMinutes"],
+            "announcement": current["announcement"],
+        },
         "serverNow": now,
     }
     if include_capacity or not industry:
@@ -638,24 +698,12 @@ def connect_team(team_id: str, pin: str, ip: str):
         raise ApiError(429, "Too many incorrect PIN attempts. Wait a few minutes, then try again.")
     collection = db().data_tycoon_teams
     team = collection.find_one({"_id": key})
+    # Teams are created by organizers only; players can never create a team or set a PIN.
     if team is None:
-        if not TEAM_NAME_PATTERN.match(team_id):
-            raise ApiError(400, "Team names must be 2 to 40 characters: letters, numbers, spaces and basic punctuation.")
-        salt = secrets.token_bytes(16)
-        team = {**new_team(team_id), "_id": key, "pinSalt": salt.hex(), "pinHash": hash_pin(pin, salt), "pinIterations": PIN_ITERATIONS}
-        try:
-            collection.insert_one(team)
-            remember_pin(team, pin)  # just hashed it; no need to hash again
-        except DuplicateKeyError:
-            team = collection.find_one({"_id": key})
+        note_failure(ip_key, team_limit_key)
+        raise ApiError(401, "No team with that name. Check the spelling on the card the organizers gave you.")
     if not team.get("pinHash"):
-        # Pre-PIN record or organizer PIN reset: the first PIN entered becomes the team PIN.
-        salt = secrets.token_bytes(16)
-        collection.update_one(
-            {"_id": key, "$or": [{"pinHash": {"$exists": False}}, {"pinHash": ""}, {"pinHash": None}]},
-            {"$set": {"pinSalt": salt.hex(), "pinHash": hash_pin(pin, salt), "pinIterations": PIN_ITERATIONS}},
-        )
-        team = collection.find_one({"_id": key})
+        raise ApiError(401, "Your team does not have a PIN yet. Ask an organizer for one.")
     if not pin_matches(team, pin):
         note_failure(ip_key, team_limit_key)
         raise ApiError(401, "That PIN does not match this team. Check with your teammates and try again.")
@@ -722,18 +770,37 @@ def require_playable(team: dict) -> int:
     return round_number
 
 
+def require_not_paused(team: dict) -> None:
+    if settings()["rounds"]["paused"]:
+        raise ApiError(409, "The game is paused by the organizers. Please wait.", state=team_view(team))
+
+
+def finish_flash(team: dict, round_number: int, detail: str) -> dict:
+    db().data_tycoon_teams.update_one({"_id": team["_id"]}, {"$set": {"activeFlash": None, f"flashCompleted.{round_number}": True}})
+    record_activity(team, "flash-completed", detail)
+    return reload_team(team)
+
+
 @app.post("/api/team/flash/open")
 def open_flash(request: Request):
     team = require_team(request)
     round_number = require_playable(team)
+    current = settings()
+    if round_number > current["rounds"]["open"]:
+        raise ApiError(409, f"Round {round_number} has not started yet. The organizers will open it.", state=team_view(team))
+    if flag_map(team, "flashCompleted", "flashCompletedRounds").get(str(round_number)):
+        raise ApiError(409, "Your team has already read this flash. It can only be seen once. Ask an organizer if something went wrong.", state=team_view(team))
     active = team.get("activeFlash") or {}
-    if active.get("round") != round_number:
-        started = now_ms()
-        db().data_tycoon_teams.update_one({"_id": team["_id"]}, {"$set": {"activeFlash": {"round": round_number, "startedAt": started}}})
-        if not flag_map(team, "flashCompleted", "flashCompletedRounds").get(str(round_number)):
-            record_activity(team, "flash-opened", f"Opened Flash {round_number}.")
-        team = reload_team(team)
-    return json_response(team_view(team))
+    if active.get("round") == round_number:
+        # Resuming after a reload or a new sign-in. Once the timer has run out, the flash is over.
+        if flash_expired(team, current["flashTimer"], now_ms()):
+            team = finish_flash(team, round_number, f"Flash {round_number} time ran out.")
+            raise ApiError(409, "Time ran out for this flash while you were away. Ask an organizer if you need it again.", state=team_view(team))
+        return json_response(team_view(team))
+    require_not_paused(team)
+    db().data_tycoon_teams.update_one({"_id": team["_id"]}, {"$set": {"activeFlash": {"round": round_number, "startedAt": now_ms()}}})
+    record_activity(team, "flash-opened", f"Opened Flash {round_number}.")
+    return json_response(team_view(reload_team(team)))
 
 
 @app.post("/api/team/flash/close")
@@ -743,15 +810,14 @@ def close_flash(request: Request):
     active = team.get("activeFlash") or {}
     already_done = flag_map(team, "flashCompleted", "flashCompletedRounds").get(str(round_number), False)
     if active:
-        timer = settings()["flashTimer"]
-        remaining = flash_remaining_ms(team, timer, now_ms())
+        remaining = flash_remaining_ms(team, settings()["flashTimer"], now_ms())
         if not already_done and remaining > FLASH_GRACE_MS:
             raise ApiError(409, "The flash timer is still running.", remainingMs=remaining)
-        update = {"$set": {"activeFlash": None, f"flashCompleted.{round_number}": True}}
-        db().data_tycoon_teams.update_one({"_id": team["_id"]}, update)
-        if not already_done:
-            record_activity(team, "flash-completed", f"Finished reading Flash {round_number}.")
-        team = reload_team(team)
+        if already_done:
+            db().data_tycoon_teams.update_one({"_id": team["_id"]}, {"$set": {"activeFlash": None}})
+            team = reload_team(team)
+        else:
+            team = finish_flash(team, round_number, f"Finished reading Flash {round_number}.")
     return json_response(team_view(team))
 
 
@@ -760,15 +826,19 @@ def flash_page(request: Request, page_number: int, round_param: int = Query(0, a
     team = require_team(request)
     current = int(team.get("round", 1) or 1)
     round_number = round_param or current
-    done = flag_map(team, "flashCompleted", "flashCompletedRounds")
+    done = flag_map(team, "flashCompleted", "flashCompletedRounds").get(str(current), False)
     active = team.get("activeFlash") or {}
-    allowed = round_number < current or (round_number == current and (active.get("round") == current or done.get(str(current))))
-    if not allowed or not 1 <= round_number <= rules.ROUNDS:
-        raise ApiError(403, "Open this round's flash from your dashboard first.")
+    # Pages are served only while this round's flash is open: once read, it is gone.
+    allowed = (
+        round_number == current and active.get("round") == current and not done
+        and not flash_expired(team, settings()["flashTimer"], now_ms(), FLASH_GRACE_MS * 5)
+    )
+    if not allowed:
+        raise ApiError(403, "This flash is closed.")
     path = FLASH_DIR / f"flash-{round_number}" / f"page-{page_number}.webp"
     if not path.is_file():
         raise ApiError(404, "Page not found.")
-    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "private, max-age=3600"})
+    return FileResponse(path, media_type="image/webp", headers={"Cache-Control": "private, no-store"})
 
 
 @app.get("/api/team/dataset")
@@ -796,6 +866,7 @@ async def submit_round(request: Request):
     round_number = require_playable(team)
     if int(body.get("round", 0) or 0) != round_number:
         raise ApiError(409, "Your round changed. Review the dashboard and submit again.", state=team_view(team))
+    require_not_paused(team)
     if any(item["round"] == round_number for item in normalize_history(team)):
         raise ApiError(409, "This round is already submitted.", state=team_view(team))
     if not flag_map(team, "flashCompleted", "flashCompletedRounds").get(str(round_number)):
@@ -821,7 +892,6 @@ async def submit_round(request: Request):
                 "companyValue": max(0, outcome["payout"]),
                 "valueEnteredAt": time.time_ns() // 1000,
                 "isEliminated": outcome["eliminated"],
-                "roundWaitUntil": submitted_at + rules.ROUND_WAIT_MS if round_number < rules.ROUNDS and not outcome["eliminated"] else 0,
                 "activeFlash": None,
             },
         },
@@ -841,21 +911,23 @@ async def advance_round(request: Request):
     round_number = require_playable(team)
     if int(body.get("round", 0) or 0) != round_number:
         return json_response(team_view(team))  # already advanced in another tab
-    if not any(item["round"] == round_number for item in normalize_history(team)):
+    history = normalize_history(team)
+    if not any(item["round"] == round_number for item in history):
         raise ApiError(409, "Submit this round before moving on.")
-    query = {"_id": team["_id"], "round": round_number}
-    if settings()["roundWait"]["enabled"]:
-        remaining = int(team.get("roundWaitUntil", 0) or 0) - now_ms()
-        if remaining > 0:
-            raise ApiError(409, "The next round is not open yet.", state=team_view(team))
-        query["$or"] = [{"roundWaitUntil": {"$lte": now_ms()}}, {"roundWaitUntil": {"$exists": False}}]
+    require_not_paused(team)
+    rounds = settings()["rounds"]
+    if round_number + 1 > rounds["open"]:
+        raise ApiError(409, f"Round {round_number + 1} has not started yet. The organizers will open it.", state=team_view(team))
+    if last_submitted_at(history, round_number) + rounds["waitMinutes"] * 60_000 > now_ms():
+        raise ApiError(409, "The wait between rounds is not over yet.", state=team_view(team))
     updated = db().data_tycoon_teams.find_one_and_update(
-        query, {"$set": {"round": round_number + 1, "roundWaitUntil": 0, "activeFlash": None}}, return_document=ReturnDocument.AFTER
+        {"_id": team["_id"], "round": round_number},
+        {"$set": {"round": round_number + 1, "roundWaitUntil": 0, "activeFlash": None}}, return_document=ReturnDocument.AFTER,
     )
     team = updated or reload_team(team)
     if updated:
         invalidate("leaderboard")
-        record_activity(updated, "round-opened", f"Moved on to Flash {round_number + 1}.")
+        record_activity(updated, "round-opened", f"Moved on to Round {round_number + 1}.")
     return json_response(team_view(team))
 
 
@@ -895,22 +967,79 @@ async def admin_login(request: Request):
     return json_response({"token": sign_token({"scope": "admin", "exp": int(time.time()) + ADMIN_TOKEN_TTL}), "expiresIn": ADMIN_TOKEN_TTL})
 
 
+def generate_pin() -> str:
+    return f"{secrets.randbelow(900000) + 100000}"
+
+
+def pin_fields(pin: str) -> dict:
+    salt = secrets.token_bytes(16)
+    return {"pinSalt": salt.hex(), "pinHash": hash_pin(pin, salt), "pinIterations": PIN_ITERATIONS, "pinPlain": pin}
+
+
+def valid_pin(value) -> str:
+    pin = str(value or "").strip()
+    if not 4 <= len(pin) <= 64:
+        raise ApiError(400, "A PIN must be between 4 and 64 characters.")
+    return pin
+
+
+def alert_counts() -> dict[str, int]:
+    def load():
+        rows = db().data_tycoon_activities.aggregate([
+            {"$match": {"kind": {"$in": sorted(ALERT_KINDS)}}},
+            {"$group": {"_id": "$teamKey", "count": {"$sum": 1}}},
+        ])
+        return {row["_id"]: int(row["count"]) for row in rows}
+    return cached("alert-counts", 5, load)
+
+
+def flash_state(row: dict, round_number: int, timer: dict, now: int) -> str:
+    if flag_map(row, "flashCompleted", "flashCompletedRounds").get(str(round_number)):
+        return "read"
+    active = row.get("activeFlash") or {}
+    if active.get("round") == round_number:
+        return "expired" if flash_expired(row, timer, now) else "reading"
+    return "not-opened"
+
+
+def admin_team_row(row: dict, current: dict, alerts: dict[str, int], now_epoch: float, now: int) -> dict:
+    round_number = int(row.get("round", 1) or 1)
+    history = normalize_history(row)
+    rounds_done = {item["round"] for item in history}
+    finished = bool(row.get("isEliminated")) or (round_number >= rules.ROUNDS and round_number in rounds_done)
+    last_seen = float(row.get("lastSeenEpoch", 0) or 0)
+    notice = row.get("notice") if isinstance(row.get("notice"), dict) else {}
+    return {
+        "key": row["_id"], "teamId": row.get("teamId", ""), "industry": row.get("industry", ""),
+        "round": round_number, "companyValue": int(round(float(row.get("companyValue", 0) or 0))),
+        "isEliminated": bool(row.get("isEliminated")), "submitted": round_number in rounds_done, "finished": finished,
+        "online": now_epoch - last_seen < ONLINE_WINDOW_SECONDS, "lastSeenSeconds": int(now_epoch - last_seen) if last_seen else None,
+        "hasPin": bool(row.get("pinHash")), "flash": flash_state(row, round_number, current["flashTimer"], now),
+        "dataset": bool(flag_map(row, "datasetDownloaded", "datasetDownloadedRounds").get(str(round_number))),
+        "alerts": alerts.get(row["_id"], 0), "notice": str(notice.get("text", "")),
+    }
+
+
+ADMIN_TEAM_FIELDS = {
+    "teamId": 1, "industry": 1, "round": 1, "companyValue": 1, "isEliminated": 1, "lastSeenEpoch": 1, "history": 1,
+    "pinHash": 1, "flashCompleted": 1, "flashCompletedRounds": 1, "datasetDownloaded": 1, "datasetDownloadedRounds": 1,
+    "activeFlash": 1, "notice": 1, "valueEnteredAt": 1,
+}
+
+
 @app.get("/api/admin/dashboard")
 def admin_dashboard(request: Request, team: str = "", industry: str = "", kind: str = "alerts"):
     require_admin(request)
     database = db()
-    now = time.time()
-    teams = []
-    for row in database.data_tycoon_teams.find(
-        {}, {"teamId": 1, "industry": 1, "round": 1, "companyValue": 1, "isEliminated": 1, "lastSeenEpoch": 1, "history.round": 1, "pinHash": 1}
-    ).sort([("companyValue", DESCENDING), ("valueEnteredAt", ASCENDING), ("teamId", ASCENDING)]):
-        rounds_done = {item.get("round") for item in row.get("history", []) if isinstance(item, dict)}
-        teams.append({
-            "key": row["_id"], "teamId": row.get("teamId", ""), "industry": row.get("industry", ""),
-            "round": int(row.get("round", 1) or 1), "companyValue": int(round(float(row.get("companyValue", 0) or 0))),
-            "isEliminated": bool(row.get("isEliminated")), "submitted": int(row.get("round", 1) or 1) in rounds_done,
-            "online": now - float(row.get("lastSeenEpoch", 0) or 0) < ONLINE_WINDOW_SECONDS, "hasPin": bool(row.get("pinHash")),
-        })
+    current = settings()
+    alerts = alert_counts()
+    now_epoch, now = time.time(), now_ms()
+    teams = [
+        admin_team_row(row, current, alerts, now_epoch, now)
+        for row in database.data_tycoon_teams.find({}, ADMIN_TEAM_FIELDS).sort(
+            [("companyValue", DESCENDING), ("valueEnteredAt", ASCENDING), ("teamId", ASCENDING)]
+        )
+    ]
     query: dict = {}
     if kind == "alerts":
         query["kind"] = {"$in": sorted(ALERT_KINDS)}
@@ -918,6 +1047,8 @@ def admin_dashboard(request: Request, team: str = "", industry: str = "", kind: 
         query["kind"] = {"$in": ["screenshot-shortcut", "screenshot-suspected", "print-attempt", "devtools-shortcut"]}
     elif kind == "focus":
         query["kind"] = {"$in": ["tab-hidden", "window-blur", "focus-return"]}
+    elif kind == "organizer":
+        query["actor"] = "organizer"
     if team:
         query["teamKey"] = team_key(team)
     if industry:
@@ -931,63 +1062,327 @@ def admin_dashboard(request: Request, team: str = "", industry: str = "", kind: 
     recent_alerts = database.data_tycoon_activities.count_documents({"kind": {"$in": sorted(ALERT_KINDS)}, "createdAt": {"$gte": since}})
     return json_response({
         "teams": teams, "activities": activities, "recentAlerts": recent_alerts,
-        "settings": settings(), "industryCapacity": industry_capacity(), "serverNow": now_ms(),
+        "settings": current, "industryCapacity": industry_capacity(), "serverNow": now, "rounds": rules.ROUNDS,
+        "industries": rules.INDUSTRIES,
     })
+
+
+def save_setting(doc_id: str, values: dict) -> None:
+    db().data_tycoon_settings.update_one({"_id": doc_id}, {"$set": values}, upsert=True)
+
+
+def int_field(body: dict, name: str, low: int, high: int, label: str) -> int:
+    value = body[name]
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != int(value) or not low <= value <= high:
+        raise ApiError(400, f"{label} must be a whole number from {low} to {high}.")
+    return int(value)
 
 
 @app.patch("/api/admin/settings")
 async def admin_settings(request: Request):
     require_admin(request)
     body = await json_body(request)
-    names = {"flashTimer": ("flash-timer", False), "roundWait": ("round-wait", True)}
     database = db()
-    for field, (doc_id, default) in names.items():
-        if field not in body:
-            continue
-        enabled = body[field]
-        if not isinstance(enabled, bool):
-            raise ApiError(400, f"{field} must be true or false.")
-        existing = database.data_tycoon_settings.find_one({"_id": doc_id}) or {}
-        if bool(existing.get("enabled", default)) != enabled:
-            database.data_tycoon_settings.update_one({"_id": doc_id}, {"$set": {"enabled": enabled, "changedAt": now_ms()}}, upsert=True)
+    current = settings()
+    now = now_ms()
+    flash_doc = database.data_tycoon_settings.find_one({"_id": "flash-timer"}) or {}
+    if "flashTimer" in body:
+        if not isinstance(body["flashTimer"], bool):
+            raise ApiError(400, "flashTimer must be true or false.")
+        if bool(flash_doc.get("enabled", False)) != body["flashTimer"]:
+            save_setting("flash-timer", {"enabled": body["flashTimer"], "changedAt": now})
+    if "flashMinutes" in body:
+        save_setting("flash-timer", {"minutes": int_field(body, "flashMinutes", 1, 60, "Flash minutes")})
+    rounds = current["rounds"]
+    # Start from the resolved state, so a schedule that already fired is kept.
+    control = {"openRound": rounds["open"], "openedAt": dict(rounds["openedAt"]),
+               "scheduledRound": rounds["scheduledRound"], "scheduledAt": rounds["scheduledAt"]}
+    if "openRound" in body:
+        target = int_field(body, "openRound", 0, rules.ROUNDS, "Open round")
+        for number in range(control["openRound"] + 1, target + 1):
+            control["openedAt"].setdefault(str(number), now)
+        control.update({"openRound": target, "scheduledRound": 0, "scheduledAt": 0})
+    if "schedule" in body:
+        schedule = body["schedule"]
+        if schedule is None:
+            control.update({"scheduledRound": 0, "scheduledAt": 0})
+        else:
+            if not isinstance(schedule, dict):
+                raise ApiError(400, "schedule must be an object with round and minutes.")
+            number = int_field(schedule, "round", 1, rules.ROUNDS, "Scheduled round")
+            minutes = schedule.get("minutes", 0)
+            if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or not 0 <= minutes <= 600:
+                raise ApiError(400, "Minutes must be between 0 and 600.")
+            if number <= control["openRound"]:
+                raise ApiError(400, f"Round {number} is already open.")
+            control.update({"scheduledRound": number, "scheduledAt": now + int(minutes * 60_000)})
+    if "waitMinutes" in body:
+        control["waitMinutes"] = int_field(body, "waitMinutes", 0, 240, "Wait between rounds")
+    if "paused" in body:
+        if not isinstance(body["paused"], bool):
+            raise ApiError(400, "paused must be true or false.")
+        control["paused"] = body["paused"]
+    if {"openRound", "schedule", "waitMinutes", "paused"} & body.keys():
+        save_setting("round-control", control)
+    if "announcement" in body:
+        text = clean_text(body["announcement"], 280)
+        save_setting("announcement", {"text": text, "at": now if text else 0})
     invalidate("settings")
+    changes = ", ".join(f"{key}={json.dumps(value)[:60]}" for key, value in body.items())
+    if changes:
+        record_activity({"teamId": "", "round": 0}, "organizer-settings", f"Settings changed: {changes}", "organizer")
     return json_response(settings())
 
 
-@app.patch("/api/admin/team-balance")
-async def admin_team_balance(request: Request):
-    require_admin(request)
-    body = await json_body(request)
-    amount = body.get("companyValue")
-    if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not math.isfinite(amount) or not 0 <= amount <= 10**12:
-        raise ApiError(400, "Enter a balance between ₹0 and ₹1,000,000,000,000.")
-    key = team_key(str(body.get("teamKey", "")))
-    team = db().data_tycoon_teams.find_one({"_id": key})
+def find_team_or_404(key_value) -> dict:
+    team = db().data_tycoon_teams.find_one({"_id": team_key(str(key_value or ""))})
     if not team:
-        raise ApiError(404, "Team not found.")
-    new_amount = int(round(amount))
-    old_amount = int(round(float(team.get("companyValue", 0) or 0)))
-    updates = {"companyValue": new_amount}
-    if new_amount != old_amount:
-        updates["valueEnteredAt"] = time.time_ns() // 1000
-    db().data_tycoon_teams.update_one({"_id": key}, {"$set": updates, "$inc": {"moneyRevision": 1}})
-    invalidate("leaderboard")
-    record_activity(team, "organizer-balance-edit", f"Organizer changed the balance from ₹{old_amount:,} to ₹{new_amount:,}.", "organizer")
-    return json_response({"ok": True, "companyValue": new_amount})
+        raise ApiError(404, "Team not found. It may have been deleted or renamed.")
+    return team
 
 
-@app.post("/api/admin/team-reset-pin")
-async def admin_reset_pin(request: Request):
+def change_seat(old: str, new: str) -> None:
+    """Keep industry seat counters right when an organizer moves or removes a team."""
+    if old == new:
+        return
+    database = db()
+    if old in rules.INDUSTRIES:
+        database.data_tycoon_industry_capacity.update_one({"_id": old, "count": {"$gt": 0}}, {"$inc": {"count": -1}})
+    if new in rules.INDUSTRIES:
+        database.data_tycoon_industry_capacity.update_one({"_id": new}, {"$inc": {"count": 1}}, upsert=True)
+    invalidate("capacity")
+
+
+@app.post("/api/admin/teams")
+async def admin_create_teams(request: Request):
+    """Create teams. Body: {"teams": [{"teamId": "...", "pin": "optional", "industry": "optional"}]}."""
     require_admin(request)
     body = await json_body(request)
-    key = team_key(str(body.get("teamKey", "")))
-    team = db().data_tycoon_teams.find_one_and_update(
-        {"_id": key}, {"$set": {"pinHash": "", "pinSalt": ""}, "$inc": {"sessionVersion": 1}}, return_document=ReturnDocument.AFTER
-    )
-    if not team:
-        raise ApiError(404, "Team not found.")
-    record_activity(team, "organizer-pin-reset", "Organizer reset the team PIN and signed out every device.", "organizer")
-    return json_response({"ok": True})
+    rows = body.get("teams")
+    if not isinstance(rows, list) or not rows:
+        raise ApiError(400, "Add at least one team.")
+    if len(rows) > 200:
+        raise ApiError(400, "Create at most 200 teams at a time.")
+    collection = db().data_tycoon_teams
+    industry_capacity()  # seat counters must exist before teams are added to them
+    created, skipped, seen = [], [], set()
+    for row in rows:
+        row = row if isinstance(row, dict) else {"teamId": row}
+        name = clean_text(row.get("teamId"), 80)
+        key = team_key(name)
+        if not TEAM_NAME_PATTERN.match(name):
+            skipped.append({"teamId": name, "reason": "Names must be 2 to 40 letters, numbers, spaces or basic punctuation."})
+            continue
+        if key in seen:
+            skipped.append({"teamId": name, "reason": "Listed twice."})
+            continue
+        seen.add(key)
+        industry = clean_text(row.get("industry"), 40)
+        if industry and industry not in rules.INDUSTRIES:
+            skipped.append({"teamId": name, "reason": f"Unknown industry {industry}."})
+            continue
+        try:
+            pin = valid_pin(row.get("pin")) if str(row.get("pin") or "").strip() else generate_pin()
+        except ApiError as error:
+            skipped.append({"teamId": name, "reason": error.message})
+            continue
+        team = {**new_team(name), "_id": key, **pin_fields(pin), "industry": industry}
+        try:
+            collection.insert_one(team)
+        except DuplicateKeyError:
+            skipped.append({"teamId": name, "reason": "A team with this name already exists."})
+            continue
+        if industry:
+            change_seat("", industry)
+        record_activity(team, "organizer-team-created", "Organizer created the team.", "organizer")
+        created.append({"teamId": name, "pin": pin, "industry": industry})
+    invalidate("leaderboard", "capacity")
+    return json_response({"created": created, "skipped": skipped})
+
+
+@app.get("/api/admin/team")
+def admin_team_detail(request: Request, key: str = ""):
+    require_admin(request)
+    team = find_team_or_404(key)
+    current = settings()
+    row = admin_team_row(team, current, alert_counts(), time.time(), now_ms())
+    activities = [
+        {"kind": item.get("kind", ""), "detail": item.get("detail", ""), "actor": item.get("actor", "team"),
+         "round": item.get("round", 1), "timestamp": item["_id"].generation_time.isoformat()}
+        for item in db().data_tycoon_activities.find({"teamKey": team["_id"]}).sort("_id", DESCENDING).limit(60)
+    ]
+    view = team_view(team)
+    return json_response({
+        **row, "pin": team.get("pinPlain", ""), "history": view["history"], "activities": activities,
+        "flashRemainingMs": view["activeFlash"]["remainingMs"] if view["activeFlash"] else 0,
+        "flashDone": flag_map(team, "flashCompleted", "flashCompletedRounds"),
+        "datasetDone": flag_map(team, "datasetDownloaded", "datasetDownloadedRounds"),
+    })
+
+
+@app.post("/api/admin/team-action")
+async def admin_team_action(request: Request):
+    require_admin(request)
+    body = await json_body(request)
+    action = str(body.get("action", ""))
+    value = body.get("value")
+    database = db()
+    collection = database.data_tycoon_teams
+    team = find_team_or_404(body.get("teamKey"))
+    industry_capacity()  # seat counters must exist before a seat moves
+    key = team["_id"]
+    round_number = int(team.get("round", 1) or 1)
+    result: dict = {"ok": True}
+
+    def log(kind: str, detail: str, target: dict | None = None) -> None:
+        record_activity(target or team, kind, detail, "organizer")
+
+    if action == "set-balance":
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 10**12:
+            raise ApiError(400, "Enter a balance between ₹0 and ₹1,000,000,000,000.")
+        new_amount, old_amount = int(round(value)), int(round(float(team.get("companyValue", 0) or 0)))
+        updates = {"companyValue": new_amount}
+        if new_amount != old_amount:
+            updates["valueEnteredAt"] = time.time_ns() // 1000
+        collection.update_one({"_id": key}, {"$set": updates, "$inc": {"moneyRevision": 1}})
+        log("organizer-balance-edit", f"Organizer changed the balance from ₹{old_amount:,} to ₹{new_amount:,}.")
+        result["companyValue"] = new_amount
+    elif action == "set-pin":
+        pin = valid_pin(value) if str(value or "").strip() else generate_pin()
+        collection.update_one({"_id": key}, {"$set": pin_fields(pin), "$inc": {"sessionVersion": 1}})
+        log("organizer-pin-reset", "Organizer set a new PIN and signed out the team's device.")
+        result["pin"] = pin
+    elif action == "sign-out":
+        collection.update_one({"_id": key}, {"$inc": {"sessionVersion": 1}})
+        log("organizer-sign-out", "Organizer signed out the team's device.")
+    elif action == "reopen-flash":
+        collection.update_one({"_id": key}, {
+            "$set": {"activeFlash": None},
+            "$unset": {f"flashCompleted.{round_number}": "", f"flashCompletedRounds.flash-{round_number}": ""},
+        })
+        log("organizer-flash-reopened", f"Organizer re-enabled Flash {round_number} (one more viewing, fresh timer).")
+    elif action == "complete-flash":
+        collection.update_one({"_id": key}, {"$set": {"activeFlash": None, f"flashCompleted.{round_number}": True}})
+        log("organizer-flash-completed", f"Organizer marked Flash {round_number} as read (data unlocked).")
+    elif action == "undo-submission":
+        history = normalize_history(team)
+        if not history:
+            raise ApiError(409, "This team has not submitted any round.")
+        last = history[-1]
+        restored = max(0, last["budget"] - last["bonus"])
+        collection.update_one({"_id": key}, {
+            "$pull": {"history": {"round": last["round"]}},
+            "$set": {"round": last["round"], "companyValue": restored, "isEliminated": False, "roundWaitUntil": 0,
+                     "activeFlash": None, "valueEnteredAt": time.time_ns() // 1000},
+            "$inc": {"moneyRevision": 1},
+        })
+        log("organizer-undo-submission", f"Organizer undid the Round {last['round']} submission; balance back to ₹{restored:,}.")
+    elif action in ("advance", "set-round"):
+        target = round_number + 1 if action == "advance" else value
+        if isinstance(target, bool) or not isinstance(target, int) or not 1 <= target <= rules.ROUNDS:
+            raise ApiError(400, f"Choose a round from 1 to {rules.ROUNDS}.")
+        collection.update_one({"_id": key}, {"$set": {"round": target, "activeFlash": None, "roundWaitUntil": 0}})
+        log("organizer-set-round", f"Organizer moved the team from Round {round_number} to Round {target}.")
+    elif action == "set-industry":
+        industry = clean_text(value, 40)
+        if industry and industry not in rules.INDUSTRIES:
+            raise ApiError(400, "Choose one of the listed industries, or none.")
+        old = team.get("industry") or ""
+        collection.update_one({"_id": key}, {"$set": {"industry": industry}})
+        change_seat(old, industry)
+        log("organizer-industry", f"Organizer changed the industry from {old or 'none'} to {industry or 'none'}.")
+    elif action == "set-eliminated":
+        flag = bool(value)
+        collection.update_one({"_id": key}, {"$set": {"isEliminated": flag}})
+        log("organizer-eliminated", "Organizer disqualified the team." if flag else "Organizer reinstated the team.")
+    elif action == "notice":
+        text = clean_text(value, 280)
+        collection.update_one({"_id": key}, {"$set": {"notice": {"text": text, "at": now_ms()} if text else None}})
+        log("organizer-notice", f"Organizer sent a message: {text}" if text else "Organizer cleared the team message.")
+    elif action == "rename":
+        name = clean_text(value, 80)
+        if not TEAM_NAME_PATTERN.match(name):
+            raise ApiError(400, "Names must be 2 to 40 letters, numbers, spaces or basic punctuation.")
+        new_key = team_key(name)
+        if new_key == key:
+            collection.update_one({"_id": key}, {"$set": {"teamId": name}})
+        else:
+            moved = {**team, "_id": new_key, "teamId": name, "sessionVersion": int(team.get("sessionVersion", 0)) + 1}
+            try:
+                collection.insert_one(moved)
+            except DuplicateKeyError as error:
+                raise ApiError(409, "Another team already has that name.") from error
+            collection.delete_one({"_id": key})
+            database.data_tycoon_activities.update_many({"teamKey": key}, {"$set": {"teamKey": new_key, "teamId": name}})
+        log("organizer-rename", f"Organizer renamed {team.get('teamId', '')} to {name}.", {**team, "teamId": name})
+        result["key"] = new_key
+    elif action == "delete":
+        collection.delete_one({"_id": key})
+        change_seat(team.get("industry") or "", "")
+        log("organizer-team-deleted", "Organizer deleted the team.")
+    else:
+        raise ApiError(400, "Unknown action.")
+    invalidate("leaderboard", "capacity", "alert-counts")
+    return json_response(result)
+
+
+@app.post("/api/admin/wipe")
+async def admin_wipe(request: Request):
+    """scope "teams": delete every team (settings stay). scope "all": a brand new game."""
+    require_admin(request)
+    body = await json_body(request)
+    scope = body.get("scope")
+    expected = {"teams": "DELETE TEAMS", "all": "RESET"}.get(scope)
+    if not expected:
+        raise ApiError(400, "Unknown reset type.")
+    if str(body.get("confirm", "")).strip() != expected:
+        raise ApiError(400, f'Type {expected} to confirm.')
+    database = db()
+    deleted = database.data_tycoon_teams.delete_many({}).deleted_count
+    database.data_tycoon_industry_capacity.delete_many({})
+    database.data_tycoon_activities.delete_many({})
+    if scope == "all":
+        database.data_tycoon_settings.delete_many({"_id": {"$ne": "schema"}})
+        database.data_tycoon_rate_limits.delete_many({"key": {"$not": {"$regex": "^admin"}}})
+    with _cache_lock:
+        _cache.clear()
+        _verified_pins.clear()
+    record_activity({"teamId": "", "round": 0}, "organizer-reset",
+                    "Organizer deleted every team." if scope == "teams" else "Organizer reset the whole game.", "organizer")
+    return json_response({"ok": True, "deletedTeams": deleted})
+
+
+def csv_response(rows: list[list], filename: str) -> Response:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    for row in rows:
+        # Neutralise spreadsheet formulas in team-supplied text.
+        writer.writerow([f"'{cell}" if isinstance(cell, str) and cell[:1] in "=+-@" else cell for cell in row])
+    return Response(buffer.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
+
+
+@app.get("/api/admin/export/{kind}")
+def admin_export(request: Request, kind: str):
+    require_admin(request)
+    teams = list(db().data_tycoon_teams.find({}).sort([("companyValue", DESCENDING), ("valueEnteredAt", ASCENDING), ("teamId", ASCENDING)]))
+    if kind == "credentials":
+        rows = [["Team name", "PIN", "Industry"]]
+        rows += [[team.get("teamId", ""), team.get("pinPlain", "(reset needed)"), team.get("industry", "")]
+                 for team in sorted(teams, key=lambda item: item.get("teamId", "").casefold())]
+        return csv_response(rows, "data-tycoon-team-pins.csv")
+    if kind == "results":
+        header = ["Rank", "Team", "Industry", "Round", "Status", "Money"]
+        header += [f"Round {n} payout" for n in range(1, rules.ROUNDS + 1)]
+        rows = [header]
+        for index, team in enumerate(teams, 1):
+            history = {item["round"]: item for item in normalize_history(team)}
+            status = "Disqualified" if team.get("isEliminated") else "Playing"
+            rows.append([index, team.get("teamId", ""), team.get("industry", ""), int(team.get("round", 1) or 1), status,
+                         int(round(float(team.get("companyValue", 0) or 0)))]
+                        + [history[n]["payout"] if n in history else "" for n in range(1, rules.ROUNDS + 1)])
+        return csv_response(rows, "data-tycoon-results.csv")
+    raise ApiError(404, "Unknown export.")
 
 
 # ── Organizer console page (secret path) and site fallback ──────────────────

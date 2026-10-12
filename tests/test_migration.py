@@ -85,13 +85,14 @@ def test_previous_version_data_upgrades_cleanly(client, db):
     assert state["industry"] == "Food" and state["round"] == 1 and state["submitted"]
     assert state["companyValue"] == 1_100_000 and state["history"][0]["payout"] == 1_100_000
     assert state["flashCompleted"] and state["datasetDownloaded"]
-    assert state["settings"]["flashTimer"]["enabled"] is True and state["settings"]["roundWait"]["enabled"] is False
+    assert state["settings"]["flashTimer"]["enabled"] is True and state["settings"]["waitMinutes"] == 0
     assert client.post("/api/team/connect", json={"teamId": "Legacy Alpha", "pin": "0000"}).status_code == 401
 
     # Old browser tokens are rejected cleanly (the player just signs in again).
     assert client.get("/api/team/state", headers=auth_a).status_code == 401
 
-    # Team A continues into Round 2 with the bonus, and plays it.
+    # Team A continues into Round 2 (once organizers open it) with the bonus, and plays it.
+    client.patch("/api/admin/settings", json={"openRound": 2}, headers=admin_headers(client))
     state = client.post("/api/team/advance", json={"round": 1}, headers=headers_a).json()
     assert state["round"] == 2 and state["budget"] == 1_100_000 + 250_000
     client.patch("/api/admin/settings", json={"flashTimer": False}, headers=admin_headers(client))

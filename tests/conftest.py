@@ -49,17 +49,30 @@ def db(client):
     return api.db()
 
 
-def connect(client, name="Team Alpha", pin="1234"):
+def admin_headers(client):
+    cached = getattr(client, "_admin_headers", None)
+    if cached:
+        return cached
+    response = client.post("/api/admin/login", json={"password": "test-password"}, headers={"X-Console-Key": CONSOLE})
+    assert response.status_code == 200, response.text
+    client._admin_headers = {"Authorization": f"Bearer {response.json()['token']}", "X-Console-Key": CONSOLE}
+    return client._admin_headers
+
+
+def create_team(client, name="Team Alpha", pin="1234", **extra):
+    response = client.post("/api/admin/teams", json={"teams": [{"teamId": name, "pin": pin, **extra}]}, headers=admin_headers(client))
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def connect(client, name="Team Alpha", pin="1234", create=True):
+    """Sign a team in, creating it through the organizer API first (players cannot create teams)."""
+    if create:
+        create_team(client, name, pin)
     response = client.post("/api/team/connect", json={"teamId": name, "pin": pin})
     assert response.status_code == 200, response.text
     data = response.json()
     return {"Authorization": f"Team {data['token']}"}, data["state"]
-
-
-def admin_headers(client):
-    response = client.post("/api/admin/login", json={"password": "test-password"}, headers={"X-Console-Key": CONSOLE})
-    assert response.status_code == 200, response.text
-    return {"Authorization": f"Bearer {response.json()['token']}", "X-Console-Key": CONSOLE}
 
 
 def set_settings(client, **values):
@@ -68,8 +81,18 @@ def set_settings(client, **values):
     return response.json()
 
 
+def team_action(client, key, action, value=None):
+    body = {"teamKey": key, "action": action}
+    if value is not None:
+        body["value"] = value
+    return client.post("/api/admin/team-action", json=body, headers=admin_headers(client))
+
+
 def ready_round(client, headers):
-    """Open and finish the flash, then download the dataset for the current round."""
+    """Open the round if needed, finish the flash, then download the dataset for the current round."""
+    state = client.get("/api/team/state", headers=headers).json()
+    if not state["roundOpen"]:
+        set_settings(client, openRound=state["round"])
     assert client.post("/api/team/flash/open", headers=headers).status_code == 200
     assert client.post("/api/team/flash/close", headers=headers).status_code == 200
     assert client.get("/api/team/dataset", headers=headers).status_code == 200

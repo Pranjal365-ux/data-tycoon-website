@@ -63,8 +63,10 @@ async function signIn(page, teamId, pin) {
   page.on("pageerror", error => errors.push(error.message));
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
 
-  await admin("/admin/settings", { method: "PATCH", body: { flashTimer: false, roundWait: true } });
+  await admin("/admin/settings", { method: "PATCH", body: { flashTimer: false, flashMinutes: 5, openRound: 0, waitMinutes: 30, paused: false, announcement: "", schedule: null } });
   const team = `E2E ${RUN}`;
+  const created = await admin("/admin/teams", { method: "POST", body: { teams: [{ teamId: team, pin: "1234" }] } });
+  if (!created.created?.length) throw new Error(`could not create the test team: ${JSON.stringify(created)}`);
 
   console.log("Player flow");
   await check("login page renders without organizer link", async () => {
@@ -83,6 +85,13 @@ async function signIn(page, teamId, pin) {
       window.__pasteBlocked = event.defaultPrevented;
     });
     assert(!(await page.evaluate(() => window.__pasteBlocked)), "paste was blocked");
+  });
+
+  await check("players cannot create a team by signing in", async () => {
+    await signIn(page, `Made Up ${RUN}`, "1234");
+    const text = await page.textContent(".form-error");
+    assert(/No team with that name/.test(text), text);
+    assert((await page.textContent("#loginForm")).includes("card the organizers gave you"), "login copy should mention the team card");
   });
 
   await check("wrong PIN shows a clear error", async () => {
@@ -119,7 +128,23 @@ async function signIn(page, teamId, pin) {
     assert((await page.textContent("#utilityStatus")).includes("Food"), "utility bar missing industry");
     assert((await page.textContent("#statusText")).includes("Flash timer: Off"), "ticker should show the timer setting");
     assert((await page.textContent("#datelineEdition")).includes("Food edition"), "dateline missing");
+  });
+
+  await check("round waits for the organizers to start it, then opens live", async () => {
+    await page.waitForSelector(".round-closed");
+    assert((await page.textContent(".round-closed")).includes("has not started yet"), "not-started card missing");
+    assert(!(await page.$('[data-action="open-flash"]')), "flash must not be openable before the round starts");
+    await page.screenshot({ path: `${SHOTS}/03a-not-started.png`, fullPage: true });
+    await admin("/admin/settings", { method: "PATCH", body: { openRound: 1 } });
+    await page.waitForSelector('.flash-callout [data-action="open-flash"]', { timeout: 12000 });
+    await page.waitForSelector(".toast");
+    assert((await page.textContent(".flash-callout")).includes("only once"), "show-once warning missing");
     await page.screenshot({ path: `${SHOTS}/03-round.png`, fullPage: true });
+  });
+
+  await check("no lock emoji on the page", async () => {
+    const html = await page.content();
+    assert(!html.includes("\u{1F512}") && !html.includes("🔒"), "lock emoji found");
   });
 
   await check("dataset and table are locked before the flash", async () => {
@@ -134,7 +159,7 @@ async function signIn(page, teamId, pin) {
     const watermark = await page.$eval("#flashPages .flash-page", el => getComputedStyle(el, "::after").backgroundImage);
     assert(watermark.startsWith("url("), "watermark missing on pages");
     assert((await page.textContent("#flashTimer")).trim() === "No timer", "timer off label missing");
-    assert((await page.textContent("#flashTimerNotice")).includes("Close the flash when"), "timer off notice missing");
+    assert((await page.textContent("#flashTimerNotice")).includes("cannot be opened again"), "timer off notice missing");
     assert(await page.isVisible("#flashClose"), "close button should show when the timer is off");
     assert(await page.evaluate(() => document.querySelector("#appRoot").inert), "app behind flash should be inert");
     await page.screenshot({ path: `${SHOTS}/04-flash.png` });
@@ -157,15 +182,34 @@ async function signIn(page, teamId, pin) {
     assert(!(await page.isVisible("#flashShield")), "shield should clear when pointer returns");
   });
 
-  await check("Win/Cmd+Shift blanks the flash and alerts the organizer", async () => {
+  await check("Win/Cmd+Shift blanks the flash for as long as the keys are held", async () => {
     await page.keyboard.down("Meta");
+    assert(await page.isVisible("#flashShield"), "shield not shown on the Windows/Command key alone");
+    await page.keyboard.down("Shift");
+    await page.waitForTimeout(2500);
+    assert(await page.isVisible("#flashShield"), "shield must stay up while the keys are held (was the 1.5 s bypass)");
+    await page.keyboard.down("Control");
+    await page.waitForTimeout(1500);
+    assert(await page.isVisible("#flashShield"), "shield must stay up with Cmd+Ctrl+Shift held");
+    await page.screenshot({ path: `${SHOTS}/05-shield.png` });
+    await page.keyboard.up("Control");
+    await page.keyboard.up("Shift");
+    assert(await page.isVisible("#flashShield"), "shield must stay while Cmd is still held");
+    await page.keyboard.up("Meta");
+    await page.waitForTimeout(600);
+    assert(!(await page.isVisible("#flashShield")), "shield should clear after release");
+  });
+
+  await check("a missed key release is corrected by the next mouse move", async () => {
     await page.keyboard.down("Shift");
     assert(await page.isVisible("#flashShield"), "shield not shown");
-    await page.screenshot({ path: `${SHOTS}/05-shield.png` });
+    // Simulate the OS swallowing the key release, then the mouse moving with no keys held.
+    await page.evaluate(() => document.dispatchEvent(new MouseEvent("mousemove", { clientX: 500, clientY: 400, bubbles: true, shiftKey: true })));
+    await page.waitForTimeout(400);
+    assert(await page.isVisible("#flashShield"), "shield must stay while the mouse says Shift is held");
     await page.keyboard.up("Shift");
-    await page.keyboard.up("Meta");
-    await page.waitForTimeout(800);
-    assert(!(await page.isVisible("#flashShield")), "shield should clear after release");
+    await page.waitForTimeout(500);
+    assert(!(await page.isVisible("#flashShield")), "shield should clear once released");
   });
 
   await check("Print Screen (delivered on key release, as on Windows) is reported", async () => {
@@ -204,10 +248,23 @@ async function signIn(page, teamId, pin) {
     assert(blocked, "copy/contextmenu not blocked");
   });
 
-  await check("closing the flash unlocks the dataset without a reload", async () => {
+  await check("closing the flash asks first, then unlocks the dataset without a reload", async () => {
     await page.click("#flashClose");
+    await page.waitForSelector("#confirmDialog[open]");
+    await page.click("#confirmOk");
     await page.waitForSelector("#flash", { state: "hidden" });
     await page.waitForSelector('[data-action="download-dataset"]:not([disabled])');
+  });
+
+  await check("the flash cannot be opened a second time", async () => {
+    assert(!(await page.$('.flash-callout [data-action="open-flash"]')), "open button still shown after reading");
+    assert((await page.textContent(".flash-callout")).includes("only be read once"), "read-once note missing");
+    const again = await page.evaluate(async () => {
+      const session = JSON.parse(localStorage.getItem("dt-session-v2"));
+      const response = await fetch("/api/team/flash/page/1?round=1", { headers: { Authorization: `Team ${session.token}` } });
+      return response.status;
+    });
+    assert(again === 403, `flash page still served: ${again}`);
   });
 
   await check("dataset downloads with the right file", async () => {
@@ -239,7 +296,7 @@ async function signIn(page, teamId, pin) {
     await page.click("#submitRound");
     await page.click("#confirmOk");
     await page.waitForSelector(".results-card");
-    assert(await page.isVisible('[data-countdown="wait"]'), "wait countdown missing");
+    assert((await page.textContent(".next-round-desk")).includes("opens when the organizers start it"), "next round gate message missing");
     await page.screenshot({ path: `${SHOTS}/08-results.png`, fullPage: true });
     const order = await page.$$eval(".results-card > *", nodes => nodes.map(node => node.className.split(" ")[0]));
     const at = name => order.indexOf(name);
@@ -248,8 +305,10 @@ async function signIn(page, teamId, pin) {
     assert(await page.isVisible(".row-tag.best") && await page.isVisible(".row-tag.worst"), "best/weakest tags missing");
   });
 
-  await check("organizer removing the wait opens the next round live (no reload)", async () => {
-    await admin("/admin/settings", { method: "PATCH", body: { roundWait: false } });
+  await check("opening Round 2 with a wait shows a countdown, removing the wait opens it live", async () => {
+    await admin("/admin/settings", { method: "PATCH", body: { openRound: 2 } });
+    await page.waitForSelector('.next-round-desk [data-countdown="wait"]', { timeout: 12000 });
+    await admin("/admin/settings", { method: "PATCH", body: { waitMinutes: 0 } });
     await page.waitForSelector('.next-round-desk [data-action="advance"]', { timeout: 12000 });
   });
 
@@ -263,7 +322,7 @@ async function signIn(page, teamId, pin) {
   });
 
   await check("organizer balance change reaches the player live", async () => {
-    await admin("/admin/team-balance", { method: "PATCH", body: { teamKey: team.toLowerCase(), companyValue: 1500000 } });
+    await admin("/admin/team-action", { method: "POST", body: { teamKey: team.toLowerCase(), action: "set-balance", value: 1500000 } });
     await page.waitForFunction(() => document.querySelector(".tape-budget")?.textContent.includes("17,50,000"), null, { timeout: 12000 });
     await page.waitForSelector(".toast");
   });
@@ -275,7 +334,7 @@ async function signIn(page, teamId, pin) {
     await page.waitForSelector("#flash:not([hidden])");
     assert(await page.isHidden("#flashClose"), "close should be hidden while locked");
     assert(/^0[45]:\d\d$/.test((await page.textContent("#flashTimer")).trim()), `countdown missing: ${await page.textContent("#flashTimer")}`);
-    assert((await page.textContent("#flashTimerNotice")).includes("closes by itself"), "lock notice missing");
+    assert((await page.textContent("#flashTimerNotice")).includes("closes for good"), "lock notice missing");
   });
 
   await check("reloading during a locked flash reopens it", async () => {
@@ -288,13 +347,41 @@ async function signIn(page, teamId, pin) {
     await admin("/admin/settings", { method: "PATCH", body: { flashTimer: false } });
     await page.waitForSelector("#flashClose:not([disabled])", { timeout: 12000 });
     await page.click("#flashClose");
+    await page.click("#confirmOk");
     await page.waitForSelector("#flash", { state: "hidden" });
+  });
+
+  await check("organizer can re-enable a team's flash", async () => {
+    assert(!(await page.$('.flash-callout [data-action="open-flash"]')), "flash should be closed for good");
+    await admin("/admin/team-action", { method: "POST", body: { teamKey: team.toLowerCase(), action: "reopen-flash" } });
+    await page.waitForSelector('.flash-callout [data-action="open-flash"]', { timeout: 12000 });
+    await admin("/admin/team-action", { method: "POST", body: { teamKey: team.toLowerCase(), action: "complete-flash" } });
+    await page.waitForSelector('.flash-callout.done', { timeout: 12000 });
+  });
+
+  await check("announcements and team messages appear live", async () => {
+    await admin("/admin/settings", { method: "PATCH", body: { announcement: `Lunch at 1 pm ${RUN}` } });
+    await admin("/admin/team-action", { method: "POST", body: { teamKey: team.toLowerCase(), action: "notice", value: "Please see the front desk" } });
+    await page.waitForFunction(run => document.querySelector("#page")?.textContent.includes(`Lunch at 1 pm ${run}`), RUN, { timeout: 12000 });
+    await page.waitForSelector(".press-notice.team");
+    await page.screenshot({ path: `${SHOTS}/08b-notices.png`, fullPage: true });
+    await admin("/admin/settings", { method: "PATCH", body: { announcement: "" } });
+    await admin("/admin/team-action", { method: "POST", body: { teamKey: team.toLowerCase(), action: "notice", value: "" } });
+  });
+
+  await check("pausing the game shows a notice and blocks play", async () => {
+    await admin("/admin/settings", { method: "PATCH", body: { paused: true } });
+    await page.waitForSelector(".press-notice.paused", { timeout: 12000 });
+    await admin("/admin/settings", { method: "PATCH", body: { paused: false } });
+    await page.waitForSelector(".press-notice.paused", { state: "detached", timeout: 12000 });
   });
 
   await check("leaderboard highlights the team", async () => {
     await page.click('.desk-tab[data-view="leaderboard"]');
     await page.waitForSelector(".leaderboard-box tr.me");
     assert((await page.textContent(".leaderboard-box tr.me")).includes("You"), "you marker missing");
+    assert(await page.isVisible(".medal-1"), "podium badge missing");
+    assert(!(await page.content()).includes("🥇"), "medal emoji still used");
     assert(await page.isVisible(".next-bulletin"), "next step bulletin should point back to the round from the leaderboard");
     await page.screenshot({ path: `${SHOTS}/09-leaderboard.png`, fullPage: true });
   });
@@ -317,7 +404,8 @@ async function signIn(page, teamId, pin) {
 
   await check("organizer PIN reset signs the player out automatically", async () => {
     await page.click('.desk-tab[data-view="round"]');
-    await admin("/admin/team-reset-pin", { method: "POST", body: { teamKey: team.toLowerCase() } });
+    const reset = await admin("/admin/team-action", { method: "POST", body: { teamKey: team.toLowerCase(), action: "set-pin", value: "5678" } });
+    assert(reset.pin === "5678", JSON.stringify(reset));
     await page.waitForSelector("#loginForm", { timeout: 12000 });
     assert((await page.textContent(".form-error")).length > 10, "no sign-out message");
   });
@@ -336,10 +424,45 @@ async function signIn(page, teamId, pin) {
   });
 
   await check("console timer toggle works", async () => {
-    const before = await adminPage.textContent("#flashTimerStatus");
+    const before = await adminPage.textContent("#flashTimerDescription");
     await adminPage.click("#flashTimerToggle");
-    await adminPage.waitForFunction(text => document.querySelector("#flashTimerStatus").textContent !== text, before);
+    await adminPage.waitForFunction(text => document.querySelector("#flashTimerDescription").textContent !== text, before);
     await adminPage.click("#flashTimerToggle");
+    await adminPage.waitForFunction(text => document.querySelector("#flashTimerDescription").textContent === text, before);
+  });
+
+  await check("console shows round control with live counts", async () => {
+    await adminPage.waitForFunction(() => document.querySelector("#gameStatus").textContent.includes("ROUND 2"));
+    assert((await adminPage.textContent("#openNextButton")).includes("OPEN ROUND 3"), "next round button wrong");
+    assert((await adminPage.textContent("#roundTrack")).includes("Round 1"), "round track missing");
+  });
+
+  await check("console creates teams with PINs", async () => {
+    await adminPage.click("#addTeamsButton");
+    await adminPage.fill("#addLines", `Console ${RUN} A\nConsole ${RUN} B, 9999, Pharma`);
+    await adminPage.click("#addSubmit");
+    await adminPage.waitForSelector("#addResult:not([hidden])");
+    const rows = await adminPage.$$eval("#addResultBody tr", nodes => nodes.map(node => node.textContent));
+    assert(rows.length === 2 && rows[1].includes("9999") && /\d{6}/.test(rows[0]), rows.join(" | "));
+    await adminPage.screenshot({ path: `${SHOTS}/13-console-add.png` });
+    await adminPage.click("#addDialog .dialog-head button");
+  });
+
+  await check("console search and manage dialog work", async () => {
+    await adminPage.fill("#teamSearch", `console ${RUN} b`);
+    await adminPage.waitForFunction(() => document.querySelectorAll("#teamsBody tr").length === 1);
+    await adminPage.click('#teamsBody [data-manage]');
+    await adminPage.waitForSelector("#teamDialog[open]");
+    await adminPage.waitForFunction(() => document.querySelector("#tdFacts")?.textContent.includes("Pharma"));
+    await adminPage.click("#tdShowPin");
+    await adminPage.waitForFunction(() => document.querySelector("#tdPin").textContent === "9999");
+    await adminPage.screenshot({ path: `${SHOTS}/14-console-manage.png` });
+    adminPage.once("dialog", dialog => dialog.accept(`Console ${RUN} B`));
+    await adminPage.click('#teamDialog [data-act="delete"]');
+    await adminPage.waitForFunction(() => !document.querySelector("#teamDialog").open);
+    await adminPage.waitForFunction(run => !document.querySelector("#teamsBody").textContent.includes(`Console ${run} B`), RUN);
+    await adminPage.fill("#teamSearch", "");
+    await adminPage.screenshot({ path: `${SHOTS}/12b-console-bottom.png`, fullPage: true });
   });
 
   await check("no JavaScript errors in the browser", async () => {
