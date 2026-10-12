@@ -195,10 +195,69 @@ def test_scoring_rules_match_the_original_game():
     loss = {name: 50_000 for name in params}
     loss[trap] = 550_000
     assert rules.score_round("Food", 1, 1_000_000, loss)["returns"][trap] == -495_000
-    # 2.7 parameter bands.
-    assert rules.effective_multiplier(2.7, 20)[0] == 2.7 * 0.8
+    # 2.7 parameter bands (exact values from the organizers' sheet).
+    assert rules.effective_multiplier(2.7, 20)[0] == 2.16
     assert rules.effective_multiplier(2.7, 30)[0] == 2.7
-    assert rules.effective_multiplier(2.7, 90)[0] == 2.7 * 0.6
+    assert rules.effective_multiplier(2.7, 90)[0] == 1.62
+
+
+SHEET = {
+    # Organizers' multiplier sheet, Round 1 to 4. Two industries in full plus spot checks.
+    ("Travel and Auto", "Marketing & Sales"): (0.3, 0.7, 2.7, 0.8),
+    ("Travel and Auto", "Supply Chain & Logistics"): (1.0, 2.7, 1.0, 1.2),
+    ("Travel and Auto", "Technology & Digitalization"): (0.8, 1.2, 0.7, 1.0),
+    ("Travel and Auto", "Workforce & Talent"): (0.0, 0.8, 0.0, 0.3),
+    ("Travel and Auto", "R&D & Innovation"): (1.5, 0.5, 0.5, 0.5),
+    ("Travel and Auto", "Vehicle Manufacturing"): (1.8, 1.5, 1.2, 1.8),
+    ("Travel and Auto", "Energy & Propulsion"): (2.7, 0.3, 0.8, 1.5),
+    ("Travel and Auto", "Vehicle Technology"): (1.2, 1.0, 1.5, 0.7),
+    ("Travel and Auto", "Dealership & Distribution"): (0.7, 1.8, 1.8, 2.7),
+    ("Travel and Auto", "Tourism & Aviation"): (0.5, 0.0, 0.3, 0.0),
+    ("Education", "R&D & Innovation"): (2.7, 1.2, 2.7, 1.2),
+    ("Education", "Marketing & Sales"): (0.0, 0.3, 1.8, 0.7),
+    ("Education", "Supply Chain & Logistics"): (0.5, 0.5, 0.5, 0.3),
+    ("Education", "Technology & Digitalization"): (1.5, 0.0, 1.5, 0.5),
+    ("Education", "Workforce & Talent"): (1.0, 1.0, 0.3, 1.0),
+    ("Education", "Faculty Development"): (0.8, 0.8, 0.8, 0.8),
+    ("Education", "Curriculum & Content"): (1.8, 2.7, 1.0, 2.7),
+    ("Education", "Industry Partnerships"): (1.2, 1.8, 1.2, 1.8),
+    ("Education", "Student Services & Admissions"): (0.7, 0.7, 0.7, 0.0),
+    ("Education", "Assessment & Certification"): (0.3, 1.5, 0.0, 1.5),
+    ("Food", "Supply Chain & Logistics"): (1.8, 2.7, 1.2, 0.0),
+    ("Electronics", "Memory & Storage"): (2.7, 1.2, 0.7, 1.2),
+    ("Pharma", "Quality Control & Compliance"): (1.5, 1.8, 2.7, 1.2),
+}
+
+
+def test_multipliers_match_the_organizer_sheet():
+    for (industry, parameter), values in SHEET.items():
+        for round_number, value in enumerate(values, 1):
+            assert rules.base_multipliers(industry, round_number)[parameter] == value, (industry, parameter, round_number)
+    for industry in rules.INDUSTRIES:
+        for round_number in range(1, rules.ROUNDS + 1):
+            column = sorted(rules.base_multipliers(industry, round_number).values(), reverse=True)
+            assert column == rules.RANK_MULTIPLIERS
+
+
+def test_band_edges_stay_in_the_lower_band():
+    params = rules.PARAMETERS["Travel and Auto"]
+    top = "Dealership & Distribution"  # 2.7 in Round 4
+    for share, multiplier in [(20, 2.16), (40, 2.7), (60, 2.43), (80, 1.89)]:
+        amount = 1_000_000 * share // 100
+        allocations = {name: (1_000_000 - amount) // 9 for name in params if name != top}
+        allocations[params[0] if params[0] != top else params[1]] += 1_000_000 - amount - sum(allocations.values())
+        allocations[top] = amount
+        result = rules.score_round("Travel and Auto", 4, 1_000_000, allocations)
+        assert result["returns"][top] == round(amount * multiplier), share
+    # Exactly 80% in a 0.0 parameter stays in the game; one rupee more eliminates.
+    zero = "Student Services & Admissions"  # 0.0 in Education Round 4
+    others = [name for name in rules.PARAMETERS["Education"] if name != zero]
+    safe = {name: 200_000 // 9 for name in others}
+    safe[others[0]] += 200_000 - sum(safe.values())
+    assert not rules.score_round("Education", 4, 1_000_000, {**safe, zero: 800_000})["eliminated"]
+    over = dict(safe)
+    over[others[0]] -= 1
+    assert rules.score_round("Education", 4, 1_000_000, {**over, zero: 800_001})["eliminated"]
 
 
 def test_every_industry_round_has_a_complete_ranking_and_dataset():

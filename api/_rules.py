@@ -8,6 +8,7 @@ browser. Keep it out of public/.
 from __future__ import annotations
 
 import math
+from fractions import Fraction
 
 ROUNDS = 4
 BASE_BUDGET = 1_000_000
@@ -44,40 +45,92 @@ PARAMETERS = {
     "Education": [*COMMON_PARAMETERS, "Faculty Development", "Curriculum & Content", "Industry Partnerships", "Student Services & Admissions", "Assessment & Certification"],
 }
 
-# Parameters ordered from best to worst return, per industry and flash round.
-RANKS = {
-    "Food": [
-        ["Production & Manufacturing", "Supply Chain & Logistics", "R&D & Innovation", "Quality Control & Food Safety", "Technology & Digitalization", "Demand & Inventory Management", "Product & Revenue Management", "Procurement & Sourcing", "Marketing & Sales", "Workforce & Talent"],
-        ["Supply Chain & Logistics", "Demand & Inventory Management", "Quality Control & Food Safety", "Production & Manufacturing", "Marketing & Sales", "Technology & Digitalization", "Procurement & Sourcing", "R&D & Innovation", "Product & Revenue Management", "Workforce & Talent"],
-        ["Demand & Inventory Management", "Quality Control & Food Safety", "Marketing & Sales", "Supply Chain & Logistics", "Procurement & Sourcing", "Production & Manufacturing", "Product & Revenue Management", "R&D & Innovation", "Technology & Digitalization", "Workforce & Talent"],
-        ["Procurement & Sourcing", "Product & Revenue Management", "Production & Manufacturing", "Technology & Digitalization", "Demand & Inventory Management", "Marketing & Sales", "Quality Control & Food Safety", "R&D & Innovation", "Workforce & Talent", "Supply Chain & Logistics"],
-    ],
-    "Electronics": [
-        ["Memory & Storage", "Advanced Materials & Thermal Systems", "R&D & Innovation", "Semiconductor & Chip Technology", "Technology & Digitalization", "Component Manufacturing", "Device Assembly", "Workforce & Talent", "Marketing & Sales", "Supply Chain & Logistics"],
-        ["Technology & Digitalization", "Semiconductor & Chip Technology", "Advanced Materials & Thermal Systems", "Memory & Storage", "R&D & Innovation", "Workforce & Talent", "Marketing & Sales", "Supply Chain & Logistics", "Device Assembly", "Component Manufacturing"],
-        ["R&D & Innovation", "Device Assembly", "Marketing & Sales", "Component Manufacturing", "Supply Chain & Logistics", "Semiconductor & Chip Technology", "Memory & Storage", "Technology & Digitalization", "Workforce & Talent", "Advanced Materials & Thermal Systems"],
-        ["Semiconductor & Chip Technology", "R&D & Innovation", "Device Assembly", "Memory & Storage", "Technology & Digitalization", "Marketing & Sales", "Component Manufacturing", "Advanced Materials & Thermal Systems", "Workforce & Talent", "Supply Chain & Logistics"],
-    ],
-    "Education": [
-        ["R&D & Innovation", "Curriculum & Content", "Technology & Digitalization", "Industry Partnerships", "Workforce & Talent", "Faculty Development", "Student Services & Admissions", "Supply Chain & Logistics", "Assessment & Certification", "Marketing & Sales"],
-        ["Curriculum & Content", "Industry Partnerships", "Assessment & Certification", "R&D & Innovation", "Workforce & Talent", "Faculty Development", "Student Services & Admissions", "Supply Chain & Logistics", "Marketing & Sales", "Technology & Digitalization"],
-        ["R&D & Innovation", "Marketing & Sales", "Technology & Digitalization", "Industry Partnerships", "Curriculum & Content", "Faculty Development", "Student Services & Admissions", "Supply Chain & Logistics", "Workforce & Talent", "Assessment & Certification"],
-        ["Curriculum & Content", "Assessment & Certification", "Student Services & Admissions", "R&D & Innovation", "Technology & Digitalization", "Faculty Development", "Marketing & Sales", "Industry Partnerships", "Workforce & Talent", "Supply Chain & Logistics"],
-    ],
-    "Pharma": [
-        ["R&D & Innovation", "Medical Devices & Digital Care", "Quality Control & Compliance", "Marketing & Sales", "Clinical Trials", "Drug Manufacturing", "Hospital & Care Network", "Supply Chain & Logistics", "Technology & Digitalization", "Workforce & Talent"],
-        ["Supply Chain & Logistics", "Quality Control & Compliance", "Hospital & Care Network", "Technology & Digitalization", "Drug Manufacturing", "Clinical Trials", "Marketing & Sales", "Medical Devices & Digital Care", "R&D & Innovation", "Workforce & Talent"],
-        ["Quality Control & Compliance", "Drug Manufacturing", "Marketing & Sales", "Supply Chain & Logistics", "Hospital & Care Network", "Technology & Digitalization", "Clinical Trials", "R&D & Innovation", "Medical Devices & Digital Care", "Workforce & Talent"],
-        ["Drug Manufacturing", "R&D & Innovation", "Hospital & Care Network", "Quality Control & Compliance", "Technology & Digitalization", "Marketing & Sales", "Medical Devices & Digital Care", "Clinical Trials", "Workforce & Talent", "Supply Chain & Logistics"],
-    ],
-    "Travel and Auto": [
-        ["Energy & Propulsion", "Vehicle Manufacturing", "R&D & Innovation", "Vehicle Technology", "Supply Chain & Logistics", "Technology & Digitalization", "Dealership & Distribution", "Tourism & Aviation", "Marketing & Sales", "Workforce & Talent"],
-        ["Supply Chain & Logistics", "Dealership & Distribution", "Vehicle Manufacturing", "Technology & Digitalization", "Vehicle Technology", "Workforce & Talent", "Marketing & Sales", "R&D & Innovation", "Energy & Propulsion", "Tourism & Aviation"],
-        ["Marketing & Sales", "Dealership & Distribution", "Vehicle Technology", "Vehicle Manufacturing", "Supply Chain & Logistics", "Energy & Propulsion", "Technology & Digitalization", "R&D & Innovation", "Tourism & Aviation", "Workforce & Talent"],
-        ["Marketing & Sales", "Dealership & Distribution", "Vehicle Technology", "Vehicle Manufacturing", "Supply Chain & Logistics", "Energy & Propulsion", "Technology & Digitalization", "R&D & Innovation", "Workforce & Talent", "Tourism & Aviation"],
-    ],
+# Base multiplier of every parameter in Rounds 1, 2, 3 and 4, per industry.
+# This is the answer key: it must match the organizers' multiplier sheet cell for cell.
+# Each round uses every value of RANK_MULTIPLIERS exactly once (checked below).
+BASE_MULTIPLIERS = {
+    "Food": {
+        "R&D & Innovation": (1.5, 0.5, 0.5, 0.5),
+        "Marketing & Sales": (0.3, 1.0, 1.5, 0.8),
+        "Supply Chain & Logistics": (1.8, 2.7, 1.2, 0.0),
+        "Technology & Digitalization": (1.0, 0.8, 0.3, 1.2),
+        "Workforce & Talent": (0.0, 0.0, 0.0, 0.3),
+        "Procurement & Sourcing": (0.5, 0.7, 1.0, 2.7),
+        "Production & Manufacturing": (2.7, 1.2, 0.8, 1.5),
+        "Quality Control & Food Safety": (1.2, 1.5, 1.8, 0.7),
+        "Demand & Inventory Management": (0.8, 1.8, 2.7, 1.0),
+        "Product & Revenue Management": (0.7, 0.3, 0.7, 1.8),
+    },
+    "Electronics": {
+        "R&D & Innovation": (1.5, 1.0, 2.7, 1.8),
+        "Marketing & Sales": (0.3, 0.7, 1.5, 0.8),
+        "Supply Chain & Logistics": (0.0, 0.5, 1.0, 0.0),
+        "Technology & Digitalization": (1.0, 2.7, 0.5, 1.0),
+        "Workforce & Talent": (0.5, 0.8, 0.3, 0.3),
+        "Semiconductor & Chip Technology": (1.2, 1.8, 0.8, 2.7),
+        "Component Manufacturing": (0.8, 0.0, 1.2, 0.7),
+        "Memory & Storage": (2.7, 1.2, 0.7, 1.2),
+        "Device Assembly": (0.7, 0.3, 1.8, 1.5),
+        "Advanced Materials & Thermal Systems": (1.8, 1.5, 0.0, 0.5),
+    },
+    "Travel and Auto": {
+        "R&D & Innovation": (1.5, 0.5, 0.5, 0.5),
+        "Marketing & Sales": (0.3, 0.7, 2.7, 0.8),
+        "Supply Chain & Logistics": (1.0, 2.7, 1.0, 1.2),
+        "Technology & Digitalization": (0.8, 1.2, 0.7, 1.0),
+        "Workforce & Talent": (0.0, 0.8, 0.0, 0.3),
+        "Vehicle Manufacturing": (1.8, 1.5, 1.2, 1.8),
+        "Energy & Propulsion": (2.7, 0.3, 0.8, 1.5),
+        "Vehicle Technology": (1.2, 1.0, 1.5, 0.7),
+        "Dealership & Distribution": (0.7, 1.8, 1.8, 2.7),
+        "Tourism & Aviation": (0.5, 0.0, 0.3, 0.0),
+    },
+    "Pharma": {
+        "R&D & Innovation": (2.7, 0.3, 0.5, 1.8),
+        "Marketing & Sales": (1.2, 0.7, 1.5, 0.8),
+        "Supply Chain & Logistics": (0.5, 2.7, 1.2, 0.0),
+        "Technology & Digitalization": (0.3, 1.2, 0.8, 1.0),
+        "Workforce & Talent": (0.0, 0.0, 0.0, 0.3),
+        "Clinical Trials": (1.0, 0.8, 0.7, 0.5),
+        "Drug Manufacturing": (0.8, 1.0, 1.8, 2.7),
+        "Quality Control & Compliance": (1.5, 1.8, 2.7, 1.2),
+        "Hospital & Care Network": (0.7, 1.5, 1.0, 1.5),
+        "Medical Devices & Digital Care": (1.8, 0.5, 0.3, 0.7),
+    },
+    "Education": {
+        "R&D & Innovation": (2.7, 1.2, 2.7, 1.2),
+        "Marketing & Sales": (0.0, 0.3, 1.8, 0.7),
+        "Supply Chain & Logistics": (0.5, 0.5, 0.5, 0.3),
+        "Technology & Digitalization": (1.5, 0.0, 1.5, 0.5),
+        "Workforce & Talent": (1.0, 1.0, 0.3, 1.0),
+        "Faculty Development": (0.8, 0.8, 0.8, 0.8),
+        "Curriculum & Content": (1.8, 2.7, 1.0, 2.7),
+        "Industry Partnerships": (1.2, 1.8, 1.2, 1.8),
+        "Student Services & Admissions": (0.7, 0.7, 0.7, 0.0),
+        "Assessment & Certification": (0.3, 1.5, 0.0, 1.5),
+    },
 }
 RANK_MULTIPLIERS = [2.7, 1.8, 1.5, 1.2, 1.0, 0.8, 0.7, 0.5, 0.3, 0.0]
+
+
+def _check_answer_key() -> None:
+    """Refuse to start with a malformed answer key."""
+    for industry, table in BASE_MULTIPLIERS.items():
+        if set(table) != set(PARAMETERS[industry]):
+            raise ValueError(f"{industry}: multiplier table does not list exactly its ten parameters")
+        for round_index in range(ROUNDS):
+            column = sorted((values[round_index] for values in table.values()), reverse=True)
+            if column != RANK_MULTIPLIERS:
+                raise ValueError(f"{industry} round {round_index + 1}: must use each base multiplier exactly once")
+
+
+_check_answer_key()
+
+# Parameters ordered from best to worst return, per industry and round (derived).
+RANKS = {
+    industry: [sorted(table, key=lambda name: -table[name][round_index]) for round_index in range(ROUNDS)]
+    for industry, table in BASE_MULTIPLIERS.items()
+}
 DATASET_SLUGS = {"Food": "food", "Electronics": "electronics", "Travel and Auto": "travel-auto", "Pharma": "pharma", "Education": "education"}
 
 
@@ -86,37 +139,45 @@ def round_bonus(round_number: int) -> int:
 
 
 def base_multipliers(industry: str, round_number: int) -> dict[str, float]:
-    ranking = RANKS[industry][round_number - 1]
-    return {parameter: RANK_MULTIPLIERS[rank] for rank, parameter in enumerate(ranking)}
+    return {parameter: values[round_number - 1] for parameter, values in BASE_MULTIPLIERS[industry].items()}
+
+
+# Effective multiplier by allocation band, exactly as in the organizers' multiplier sheet.
+# Bands: up to 20%, over 20 to 40%, over 40 to 60%, over 60 to 80%, over 80%.
+# A share exactly on 20/40/60/80% stays in the lower band.
+BANDS = {
+    2.7: (2.16, 2.7, 2.43, 1.89, 1.62),
+    1.8: (1.8, 1.8, 1.62, 1.26, 1.08),
+    1.5: (1.5, 1.5, 1.35, 1.05, 0.9),
+    1.2: (1.2, 1.2, 1.08, 0.84, 0.72),
+    1.0: (1.0, 1.0, 1.0, 1.0, 1.0),
+    0.8: (0.8, 0.8, 0.8, 0.8, 0.8),
+    0.7: (0.7, 0.7, 0.7, 0.7, 0.7),
+    0.5: (0.5, 0.5, 0.5, 0.5, 0.5),
+    0.3: (0.3, 0.3, -0.9, -0.9, -0.9),
+    0.0: (0.0, 0.0, 0.0, 0.0, 0.0),
+}
+
+
+def band_index(percentage: float) -> int:
+    if percentage <= 20:
+        return 0
+    if percentage <= 40:
+        return 1
+    if percentage <= 60:
+        return 2
+    if percentage <= 80:
+        return 3
+    return 4
 
 
 def effective_multiplier(base: float, percentage: float) -> tuple[float, bool]:
-    """Apply the allocation bands. Returns (multiplier, eliminated)."""
-    if base == 0:
-        return 0.0, percentage > 80
-    if base == 0.3:
-        return (-0.9 if percentage > 40 else 0.3), False
-    if base in (1.0, 0.8, 0.7, 0.5):
-        return base, False
-    if base == 2.7:
-        if percentage <= 20:
-            return 2.7 * 0.8, False
-        if percentage <= 40:
-            return 2.7, False
-        if percentage <= 60:
-            return 2.7 * 0.9, False
-        if percentage <= 80:
-            return 2.7 * 0.7, False
-        return 2.7 * 0.6, False
-    if base in (1.8, 1.5, 1.2):
-        if percentage <= 40:
-            return base, False
-        if percentage <= 60:
-            return base * 0.9, False
-        if percentage <= 80:
-            return base * 0.7, False
-        return base * 0.6, False
-    return base, False
+    """Apply the allocation bands. Returns (multiplier, eliminated).
+
+    Over 80% of the round's money in a 0.0 parameter eliminates the team.
+    """
+    index = band_index(percentage)
+    return BANDS[base][index], base == 0.0 and index == 4
 
 
 def validate_allocations(industry: str, budget: int, allocations) -> tuple[dict[str, int] | None, str]:
@@ -151,7 +212,8 @@ def score_round(industry: str, round_number: int, budget: int, allocations: dict
     eliminated = False
     total = 0.0
     for name, amount in allocations.items():
-        multiplier, knocked_out = effective_multiplier(multipliers[name], amount / budget * 100)
+        # Exact share (no floating point), so exactly 20/40/60/80% always stays in the lower band.
+        multiplier, knocked_out = effective_multiplier(multipliers[name], Fraction(amount * 100, budget))
         eliminated = eliminated or knocked_out
         returns[name] = amount * multiplier
         total += returns[name]
