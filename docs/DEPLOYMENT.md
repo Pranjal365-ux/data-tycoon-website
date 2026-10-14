@@ -125,7 +125,7 @@ python -c "import secrets; print('ops-' + secrets.token_urlsafe(18))"   # consol
 1. Set all environment variables on the production host (including `ADMIN_CONSOLE_PATH`) and redeploy.
 2. In the console, press Reset everything (type RESET) to remove test data.
 3. Add the real teams (+ Add teams, or "Quickly make 50 teams"), then print the PIN cards or download the CSV.
-4. Set the flash timer and the wait after submitting. Leave the rounds closed until you are ready.
+4. Set the flash timer, the wait after submitting and, if you want it, the money between rounds (off by default). Leave the rounds closed until you are ready.
 5. Do a dry run with two or three laptops (Windows and macOS), then Reset everything again and re-add teams.
 6. On the day: teams sign in and choose an industry, then press Start Round 1. Keep the console open to watch progress and alerts.
 
