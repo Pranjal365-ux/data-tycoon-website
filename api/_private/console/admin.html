@@ -8,9 +8,9 @@
   <meta name="referrer" content="no-referrer" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <title>Organizer Portal | Data Tycoon</title>
-  <link rel="stylesheet" href="/src/fonts.css?v=80" />
-  <link rel="stylesheet" href="{{CONSOLE_BASE}}/admin.css?v=80" />
-  <script type="module" src="{{CONSOLE_BASE}}/admin.js?v=80"></script>
+  <link rel="stylesheet" href="/src/fonts.css?v=90" />
+  <link rel="stylesheet" href="{{CONSOLE_BASE}}/admin.css?v=90" />
+  <script type="module" src="{{CONSOLE_BASE}}/admin.js?v=90"></script>
 </head>
 <body>
   <header class="admin-header">
@@ -62,6 +62,19 @@
             <div class="control-row"><button id="pauseButton" type="button" class="button-secondary">PAUSE GAME</button></div>
             <div class="control-row"><input id="announcementText" type="text" maxlength="280" placeholder="Message shown to every team"><button id="announceButton" type="button" class="button-secondary">SEND</button><button id="announceClear" type="button" class="button-secondary">CLEAR</button></div>
             <p id="announcementNow" class="muted small"></p>
+          </div>
+          <div class="control-block full">
+            <h3>Money between rounds</h3>
+            <p class="muted" id="bonusDescription">Loading…</p>
+            <div class="control-row">
+              <button id="bonusToggle" type="button" class="button-secondary">LOADING</button>
+              <span>Amount ₹</span><input id="bonusAmount" type="number" min="0" step="1000" value="250000" aria-label="Bonus amount">
+              <span>added at the start of</span>
+              <label class="check"><input type="checkbox" data-bonus-round="2"> Round 2</label>
+              <label class="check"><input type="checkbox" data-bonus-round="3"> Round 3</label>
+              <label class="check"><input type="checkbox" data-bonus-round="4"> Round 4</label>
+              <button id="bonusSave" type="button" class="button-secondary">SAVE</button>
+            </div>
           </div>
         </div>
       </section>

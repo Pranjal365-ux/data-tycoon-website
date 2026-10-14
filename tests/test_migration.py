@@ -92,7 +92,7 @@ def test_previous_version_data_upgrades_cleanly(client, db):
     assert client.get("/api/team/state", headers=auth_a).status_code == 401
 
     # Team A continues into Round 2 (once organizers open it) with the bonus, and plays it.
-    client.patch("/api/admin/settings", json={"openRound": 2}, headers=admin_headers(client))
+    client.patch("/api/admin/settings", json={"openRound": 2, "bonusEnabled": True, "bonusAmount": 250_000, "bonusRounds": [2, 3]}, headers=admin_headers(client))
     state = client.post("/api/team/advance", json={"round": 1}, headers=headers_a).json()
     assert state["round"] == 2 and state["budget"] == 1_100_000 + 250_000
     client.patch("/api/admin/settings", json={"flashTimer": False}, headers=admin_headers(client))

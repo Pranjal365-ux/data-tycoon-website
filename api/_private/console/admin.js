@@ -190,6 +190,18 @@ function renderSettings(next) {
     : "Off: teams read at their own pace and close the flash themselves. Each flash can still be opened only once.";
   $("#flashTimerToggle").textContent = flash.enabled ? "TURN TIMER OFF" : "TURN TIMER ON";
   $("#flashTimerToggle").classList.toggle("on", flash.enabled);
+  const bonus = next.bonus;
+  const bonusEditing = document.activeElement?.matches?.("#bonusAmount, [data-bonus-round]");
+  if (!bonusEditing) {
+    $("#bonusAmount").value = bonus.amount;
+    document.querySelectorAll("[data-bonus-round]").forEach(box => { box.checked = bonus.rounds.includes(Number(box.dataset.bonusRound)); });
+  }
+  const roundsText = bonus.rounds.length ? bonus.rounds.map(n => `Round ${n}`).join(", ") : "no rounds";
+  $("#bonusDescription").textContent = bonus.enabled
+    ? `On: every team gets ${money(bonus.amount)} added to the money they invest at the start of ${roundsText}.`
+    : "Off: teams carry only what they earned into the next round. Turn it on to add money before chosen rounds.";
+  $("#bonusToggle").textContent = bonus.enabled ? "TURN BONUS OFF" : "TURN BONUS ON";
+  $("#bonusToggle").classList.toggle("on", bonus.enabled);
   $("#pauseButton").textContent = r.paused ? "RESUME GAME" : "PAUSE GAME";
   $("#pauseButton").classList.toggle("button-danger", !r.paused);
   $("#pauseButton").classList.toggle("button-primary", r.paused);
@@ -230,6 +242,19 @@ $("#flashMinutesButton").addEventListener("click", event => {
   const minutes = Number($("#flashMinutes").value);
   patchSettings(event.currentTarget, { flashMinutes: minutes }, `Flash timer length set to ${minutes} minutes.`);
 });
+function bonusForm() {
+  return {
+    bonusAmount: Number($("#bonusAmount").value),
+    bonusRounds: [...document.querySelectorAll("[data-bonus-round]:checked")].map(box => Number(box.dataset.bonusRound))
+  };
+}
+$("#bonusToggle").addEventListener("click", event => {
+  const enabled = !settings.bonus.enabled;
+  const form = bonusForm();
+  if (enabled && !confirm(`Turn the bonus on? Every team gets ${money(form.bonusAmount)} added at the start of ${form.bonusRounds.map(n => `Round ${n}`).join(", ") || "no rounds"}. Teams already in one of those rounds see their money go up straight away.`)) return;
+  patchSettings(event.currentTarget, { bonusEnabled: enabled, ...form }, enabled ? "Bonus on." : "Bonus off. Teams that have not submitted yet see their money without it.");
+});
+$("#bonusSave").addEventListener("click", event => patchSettings(event.currentTarget, bonusForm(), "Bonus amount and rounds saved."));
 $("#pauseButton").addEventListener("click", event => {
   const paused = !settings.rounds.paused;
   if (paused && !confirm("Pause the game? Teams cannot open flashes, submit or move on until you resume.")) return;

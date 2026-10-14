@@ -206,7 +206,7 @@ def team_key(team_id: str) -> str:
     return clean_text(team_id, 80).casefold()
 
 
-SETTING_IDS = ["flash-timer", "round-control", "announcement"]
+SETTING_IDS = ["flash-timer", "round-control", "announcement", "round-bonus"]
 
 
 def settings() -> dict:
@@ -217,7 +217,14 @@ def settings() -> dict:
         flash = rows.get("flash-timer", {})
         control = rows.get("round-control", {})
         note = rows.get("announcement", {})
+        bonus = rows.get("round-bonus", {})
         return {
+            # Money added to every team's balance at the start of the chosen rounds. Off unless organizers turn it on.
+            "bonus": {
+                "enabled": bool(bonus.get("enabled", False)),
+                "amount": int(bonus.get("amount", rules.ROUND_BONUS)),
+                "rounds": sorted(int(n) for n in bonus.get("rounds", list(range(2, rules.ROUNDS + 1)))),
+            },
             "flashTimer": {
                 "enabled": bool(flash.get("enabled", False)),
                 "changedAt": int(flash.get("changedAt", 0)),
@@ -511,8 +518,13 @@ def flag_map(team: dict, key: str, legacy_key: str) -> dict[str, bool]:
     return result
 
 
+def round_bonus(round_number: int) -> int:
+    bonus = settings()["bonus"]
+    return bonus["amount"] if bonus["enabled"] and round_number in bonus["rounds"] else 0
+
+
 def round_budget(team: dict) -> int:
-    return max(0, int(round(float(team.get("companyValue", 0) or 0)))) + rules.round_bonus(int(team.get("round", 1)))
+    return max(0, int(round(float(team.get("companyValue", 0) or 0)))) + round_bonus(int(team.get("round", 1) or 1))
 
 
 def flash_remaining_ms(team: dict, timer: dict, now: int) -> int:
@@ -571,7 +583,7 @@ def team_view(team: dict, include_capacity: bool = False) -> dict:
         "companyValue": int(round(float(team.get("companyValue", 0) or 0))),
         "moneyRevision": int(team.get("moneyRevision", 0) or 0),
         "budget": round_budget(team) if industry else 0,
-        "bonus": rules.round_bonus(round_number),
+        "bonus": round_bonus(round_number) if industry else 0,
         "minAllocation": rules.MIN_ALLOCATION,
         "parameters": rules.PARAMETERS.get(industry, []),
         "history": history,
@@ -811,13 +823,13 @@ def close_flash(request: Request):
     already_done = flag_map(team, "flashCompleted", "flashCompletedRounds").get(str(round_number), False)
     if active:
         remaining = flash_remaining_ms(team, settings()["flashTimer"], now_ms())
-        if not already_done and remaining > FLASH_GRACE_MS:
-            raise ApiError(409, "The flash timer is still running.", remainingMs=remaining)
+        # Teams may finish early; either way the flash is then closed for good.
         if already_done:
             db().data_tycoon_teams.update_one({"_id": team["_id"]}, {"$set": {"activeFlash": None}})
             team = reload_team(team)
         else:
-            team = finish_flash(team, round_number, f"Finished reading Flash {round_number}.")
+            early = f" with {remaining // 1000} s left on the timer" if remaining > FLASH_GRACE_MS else ""
+            team = finish_flash(team, round_number, f"Finished reading Flash {round_number}{early}.")
     return json_response(team_view(team))
 
 
@@ -880,7 +892,7 @@ async def submit_round(request: Request):
     outcome = rules.score_round(team["industry"], round_number, budget, allocations)
     submitted_at = now_ms()
     entry = {
-        "round": round_number, "budget": budget, "bonus": rules.round_bonus(round_number), "allocations": allocations,
+        "round": round_number, "budget": budget, "bonus": budget - max(0, int(round(float(team.get("companyValue", 0) or 0)))), "allocations": allocations,
         "returns": outcome["returns"], "payout": outcome["payout"], "netProfit": outcome["netProfit"],
         "eliminated": outcome["eliminated"], "submittedAt": submitted_at,
     }
@@ -1124,6 +1136,20 @@ async def admin_settings(request: Request):
         control["paused"] = body["paused"]
     if {"openRound", "schedule", "waitMinutes", "paused"} & body.keys():
         save_setting("round-control", control)
+    bonus_update: dict = {}
+    if "bonusEnabled" in body:
+        if not isinstance(body["bonusEnabled"], bool):
+            raise ApiError(400, "bonusEnabled must be true or false.")
+        bonus_update["enabled"] = body["bonusEnabled"]
+    if "bonusAmount" in body:
+        bonus_update["amount"] = int_field(body, "bonusAmount", 0, 1_000_000_000, "Bonus amount")
+    if "bonusRounds" in body:
+        chosen = body["bonusRounds"]
+        if not isinstance(chosen, list) or any(isinstance(n, bool) or not isinstance(n, int) or not 2 <= n <= rules.ROUNDS for n in chosen):
+            raise ApiError(400, f"Bonus rounds must be a list of rounds from 2 to {rules.ROUNDS}.")
+        bonus_update["rounds"] = sorted(set(chosen))
+    if bonus_update:
+        save_setting("round-bonus", bonus_update)
     if "announcement" in body:
         text = clean_text(body["announcement"], 280)
         save_setting("announcement", {"text": text, "at": now if text else 0})

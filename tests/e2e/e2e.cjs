@@ -63,7 +63,7 @@ async function signIn(page, teamId, pin) {
   page.on("pageerror", error => errors.push(error.message));
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
 
-  await admin("/admin/settings", { method: "PATCH", body: { flashTimer: false, flashMinutes: 5, openRound: 0, waitMinutes: 30, paused: false, announcement: "", schedule: null } });
+  await admin("/admin/settings", { method: "PATCH", body: { flashTimer: false, flashMinutes: 5, openRound: 0, waitMinutes: 30, paused: false, announcement: "", schedule: null, bonusEnabled: false, bonusAmount: 250000, bonusRounds: [2, 3, 4] } });
   const team = `E2E ${RUN}`;
   const created = await admin("/admin/teams", { method: "POST", body: { teams: [{ teamId: team, pin: "1234" }] } });
   if (!created.created?.length) throw new Error(`could not create the test team: ${JSON.stringify(created)}`);
@@ -134,6 +134,7 @@ async function signIn(page, teamId, pin) {
     await page.waitForSelector(".round-closed");
     assert((await page.textContent(".round-closed")).includes("has not started yet"), "not-started card missing");
     assert(!(await page.$('[data-action="open-flash"]')), "flash must not be openable before the round starts");
+    assert(!/no need to refresh/i.test(await page.textContent("#page")), "'No need to refresh' should be gone");
     await page.screenshot({ path: `${SHOTS}/03a-not-started.png`, fullPage: true });
     await admin("/admin/settings", { method: "PATCH", body: { openRound: 1 } });
     await page.waitForSelector('.flash-callout [data-action="open-flash"]', { timeout: 12000 });
@@ -312,13 +313,22 @@ async function signIn(page, teamId, pin) {
     await page.waitForSelector('.next-round-desk [data-action="advance"]', { timeout: 12000 });
   });
 
-  await check("round 2 starts with the carried balance plus bonus", async () => {
+  await check("round 2 starts with only the carried balance (bonus off by default)", async () => {
     const payout = await page.$eval(".result-highlight strong", el => el.textContent);
     await page.click('.next-round-desk [data-action="advance"]');
     await page.waitForSelector(".market-tape");
     const budget = await page.$eval(".tape-budget", el => el.textContent);
-    const expected = Number(payout.replace(/[^\d]/g, "")) + 250000;
+    const expected = Number(payout.replace(/[^\d]/g, ""));
     assert(Number(budget.replace(/[^\d]/g, "")) === expected, `${budget} != ${expected}`);
+    assert(!(await page.textContent(".market-tape")).includes("bonus"), "no bonus should be shown");
+    globalThis.__payout = expected;
+  });
+
+  await check("organizer turning the bonus on adds it live", async () => {
+    await admin("/admin/settings", { method: "PATCH", body: { bonusEnabled: true, bonusAmount: 250000, bonusRounds: [2, 3, 4] } });
+    const target = (globalThis.__payout + 250000).toLocaleString("en-IN");
+    await page.waitForFunction(text => document.querySelector(".tape-budget")?.textContent.includes(text), target, { timeout: 12000 });
+    assert((await page.textContent(".market-tape")).includes("bonus"), "bonus note missing");
   });
 
   await check("organizer balance change reaches the player live", async () => {
@@ -332,23 +342,25 @@ async function signIn(page, teamId, pin) {
     await page.waitForTimeout(5500);
     await page.click('.flash-callout [data-action="open-flash"]');
     await page.waitForSelector("#flash:not([hidden])");
-    assert(await page.isHidden("#flashClose"), "close should be hidden while locked");
+    assert(await page.isVisible("#flashClose") && await page.isEnabled("#flashClose"), "teams must be able to finish early while the timer runs");
     assert(/^0[45]:\d\d$/.test((await page.textContent("#flashTimer")).trim()), `countdown missing: ${await page.textContent("#flashTimer")}`);
-    assert((await page.textContent("#flashTimerNotice")).includes("closes for good"), "lock notice missing");
+    assert(/for good/.test(await page.textContent("#flashTimerNotice")), "notice missing");
   });
 
   await check("reloading during a locked flash reopens it", async () => {
     await page.reload();
     await page.waitForSelector("#flash:not([hidden])", { timeout: 10000 });
-    assert(await page.isHidden("#flashClose"), "lock lost after reload");
+    assert(/^0[45]:\d\d$/.test((await page.textContent("#flashTimer")).trim()), "timer lost after reload");
   });
 
-  await check("turning the timer off lets the player close it live", async () => {
-    await admin("/admin/settings", { method: "PATCH", body: { flashTimer: false } });
-    await page.waitForSelector("#flashClose:not([disabled])", { timeout: 12000 });
+  await check("closing early while the timer runs closes the flash for good", async () => {
     await page.click("#flashClose");
+    await page.waitForSelector("#confirmDialog[open]");
+    assert((await page.textContent("#confirmBody")).includes("on the timer"), "time left not shown in the confirmation");
     await page.click("#confirmOk");
     await page.waitForSelector("#flash", { state: "hidden" });
+    await page.waitForSelector('[data-action="download-dataset"]:not([disabled])');
+    await admin("/admin/settings", { method: "PATCH", body: { flashTimer: false } });
   });
 
   await check("organizer can re-enable a team's flash", async () => {

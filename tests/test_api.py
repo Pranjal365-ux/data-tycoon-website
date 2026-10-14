@@ -150,17 +150,15 @@ def test_flash_and_dataset_are_gated(client, db):
     assert client.get("/api/team/flash/page/2?round=2", headers=headers).status_code == 403
     assert client.get("/api/team/flash/page/99", headers=headers).status_code == 404
 
-    early = client.post("/api/team/flash/close", headers=headers)
-    assert early.status_code == 409 and early.json()["remainingMs"] > 0
-    assert client.get("/api/team/dataset", headers=headers).status_code == 403
+    assert client.get("/api/team/dataset", headers=headers).status_code == 403  # still reading
 
-    # Five minutes later (the timer counts from the later of opening and switching it on).
-    past = api.now_ms() - rules.FLASH_DURATION_MS
-    db.data_tycoon_teams.update_one({"teamId": "Team Alpha"}, {"$set": {"activeFlash.startedAt": past}})
-    db.data_tycoon_settings.update_one({"_id": "flash-timer"}, {"$set": {"changedAt": past}})
-    api._cache.clear()
+    # Teams may finish before the timer ends; the flash is then closed for good.
     done = client.post("/api/team/flash/close", headers=headers).json()
     assert done["flashCompleted"] is True and done["activeFlash"] is None
+    assert client.get("/api/team/flash/page/1", headers=headers).status_code == 403
+    assert client.post("/api/team/flash/open", headers=headers).status_code == 409
+    early = db.data_tycoon_activities.find_one({"kind": "flash-completed"})
+    assert "left on the timer" in early["detail"]
     dataset = client.get("/api/team/dataset", headers=headers)
     assert dataset.status_code == 200 and dataset.content[:2] == b"PK"  # Food round 1 is an Excel file
     assert "attachment" in dataset.headers["content-disposition"]
@@ -311,9 +309,41 @@ def test_round_control_wait_and_bonus(client):
     assert client.post("/api/team/advance", json={"round": 1}, headers=headers).status_code == 409
     set_settings(client, waitMinutes=0)
     opened = client.post("/api/team/advance", json={"round": 1}, headers=headers).json()
-    assert opened["round"] == 2 and opened["budget"] == after["companyValue"] + rules.ROUND_BONUS
+    # No money between rounds unless organizers turn it on.
+    assert opened["round"] == 2 and opened["bonus"] == 0 and opened["budget"] == after["companyValue"]
     # Advancing twice (e.g. from a second tab) is harmless.
     assert client.post("/api/team/advance", json={"round": 1}, headers=headers).json()["round"] == 2
+
+
+def test_bonus_between_rounds_is_an_organizer_setting(client):
+    headers, _ = connect(client)
+    client.post("/api/team/industry", json={"industry": "Pharma"}, headers=headers)
+    set_settings(client, openRound=4)
+    state = ready_round(client, headers)
+    assert state["bonus"] == 0
+    first = client.post("/api/team/submit", json={"round": 1, "allocations": even_split(state)}, headers=headers).json()
+    client.post("/api/team/advance", json={"round": 1}, headers=headers)
+    plain = client.get("/api/team/state", headers=headers).json()
+    assert plain["budget"] == first["companyValue"] and plain["bonus"] == 0
+
+    result = set_settings(client, bonusEnabled=True, bonusAmount=300_000, bonusRounds=[2, 4])
+    assert result["bonus"] == {"enabled": True, "amount": 300_000, "rounds": [2, 4]}
+    boosted = ready_round(client, headers)
+    assert boosted["bonus"] == 300_000 and boosted["budget"] == first["companyValue"] + 300_000
+    second = client.post("/api/team/submit", json={"round": 2, "allocations": even_split(boosted)}, headers=headers).json()
+    assert second["history"][1]["bonus"] == 300_000 and second["history"][1]["budget"] == boosted["budget"]
+    client.post("/api/team/advance", json={"round": 2}, headers=headers)
+    third = ready_round(client, headers)
+    assert third["bonus"] == 0 and third["budget"] == second["companyValue"]  # Round 3 not chosen
+
+    # Undo restores the balance from before the bonus.
+    team_action(client, "team alpha", "set-round", 2)
+    assert team_action(client, "team alpha", "undo-submission").status_code == 200
+    assert client.get("/api/team/state", headers=headers).json()["companyValue"] == first["companyValue"]
+
+    admin = admin_headers(client)
+    for bad in [{"bonusAmount": -1}, {"bonusRounds": [1]}, {"bonusRounds": "2"}, {"bonusEnabled": "yes"}]:
+        assert client.patch("/api/admin/settings", json=bad, headers=admin).status_code == 400
 
 
 def test_scheduled_round_opens_on_time(client, db):

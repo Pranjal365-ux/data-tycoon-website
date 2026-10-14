@@ -12,8 +12,7 @@ from fractions import Fraction
 
 ROUNDS = 4
 BASE_BUDGET = 1_000_000
-ROUND_BONUS = 250_000
-BONUS_ROUNDS = {2, 3}
+ROUND_BONUS = 250_000  # default amount when organizers turn the between-round bonus on
 MIN_ALLOCATION = 1_000
 INDUSTRY_CAPACITY = 20
 FLASH_DURATION_MS = 5 * 60 * 1000
@@ -132,10 +131,6 @@ RANKS = {
     for industry, table in BASE_MULTIPLIERS.items()
 }
 DATASET_SLUGS = {"Food": "food", "Electronics": "electronics", "Travel and Auto": "travel-auto", "Pharma": "pharma", "Education": "education"}
-
-
-def round_bonus(round_number: int) -> int:
-    return ROUND_BONUS if round_number in BONUS_ROUNDS else 0
 
 
 def base_multipliers(industry: str, round_number: int) -> dict[str, float]:

@@ -419,7 +419,7 @@ function renderLogin() {
         <span class="article-label">How it works</span>
         <ul class="rules-list">
           <li>Pick <b>one industry</b> for the whole game.</li>
-          <li>Start with <b>₹10,00,000</b>. Whatever you end a round with carries into the next, plus a <b>₹2,50,000 bonus</b> before Rounds 2 and 3.</li>
+          <li>Start with <b>₹10,00,000</b>. Whatever you end a round with carries into the next round.</li>
           <li>Each round: <b>read the news flash</b>, <b>download the data</b>, then <b>invest all of your money</b> across ten areas (at least ₹1,000 each).</li>
         </ul>
         <p class="monitoring-notice">While a news flash is open, screenshots and switching away from the tab are reported to the organizers.</p>
@@ -534,14 +534,14 @@ function renderRound() {
   <div class="market-tape">
     <div><small>Money to invest</small><b class="tape-budget">${money(team.budget)}</b><em>${budgetNote}</em></div>
     <div><small>Your rank</small><b class="tape-rank">${rank ? `#${rank.rank}` : "…"}</b><em>${rank ? `of ${rank.total} team${rank.total === 1 ? "" : "s"}` : "Loading"}</em></div>
-    <div><small>Flash timer</small><b>${timerOn ? minutesLabel(flashMinutes()) : "Off"}</b><em>${timerOn ? "Then it closes for good" : "Close it when you're done"}</em></div>
+    <div><small>Flash timer</small><b>${timerOn ? minutesLabel(flashMinutes()) : "Off"}</b><em>${timerOn ? "Or close it early when done" : "Close it when you're done"}</em></div>
     <div><small>Wait after you submit</small><b>${waitMinutes ? minutesLabel(waitMinutes) : "None"}</b><em>Next round starts when organizers open it</em></div>
   </div>`;
   if (team.finished) {
     return `${head}<section class="analysis-card notice-card"><h3>${team.isEliminated ? "Your team is out of the game" : "All four rounds complete"}</h3><p>${team.isEliminated ? "More than 80% of a round's money went into an area that returns nothing, so your team was disqualified." : `You finished with ${money(team.companyValue)}.`}</p><button type="button" data-action="nav" data-view="leaderboard">See leaderboard</button></section>${team.history.length ? companyValueChart() : ""}`;
   }
   if (s === "not-started") {
-    return `${head}<section class="analysis-card notice-card round-closed" role="status"><span class="article-label">Please wait</span><h3>Round ${team.round} has not started yet</h3><p>${nextRoundText(team.round)} The news flash, data and investment table appear here as soon as it starts. No need to refresh.</p></section>${team.history.length ? companyValueChart() : ""}`;
+    return `${head}<section class="analysis-card notice-card round-closed" role="status"><span class="article-label">Please wait</span><h3>Round ${team.round} has not started yet</h3><p>${nextRoundText(team.round)} The news flash, data and investment table appear here as soon as it starts.</p></section>${team.history.length ? companyValueChart() : ""}`;
   }
   const tooSmall = team.budget < team.minAllocation * team.parameters.length;
   const reading = team.activeFlash && !flashDone;
@@ -551,7 +551,7 @@ function renderRound() {
     <p>${flashDone
       ? "Done. Each flash can only be read once, so it is now closed."
       : timerOn
-        ? `<b>You can open it only once.</b> It stays open for ${minutesLabel(flashMinutes())}, then closes for good and unlocks the data. Gather your team before you open it.`
+        ? `<b>You can open it only once.</b> You have ${minutesLabel(flashMinutes())} to read it. It closes for good when the time runs out or when you finish early, then the data unlocks. Gather your team before you open it.`
         : "<b>You can open it only once.</b> Read it together, then close it to unlock the data. Once closed, it cannot be opened again."}</p>
     ${flashDone ? "" : `<button type="button" class="primary-red" data-action="open-flash" ${team.submitted || team.paused ? "disabled" : ""}>${reading ? "Continue reading" : "Open the flash"}</button>`}
   </section>
@@ -644,11 +644,11 @@ function renderResults() {
     next = `<p class="round-wait-message">${team.isEliminated ? "Your team is out of the game." : "That was the final round."}</p><button type="button" class="final" data-action="nav" data-view="leaderboard">See the final leaderboard</button>`;
   } else if (s === "waiting") {
     next = `<p class="round-wait-message" role="status">Round ${team.round + 1} opens in <span data-countdown="wait">${formatDuration(waitRemaining())}</span></p>
-      <p class="wait-note">Stay on this page. The button unlocks by itself, no need to refresh.</p>
+      <p class="wait-note">Stay on this page. The button unlocks by itself.</p>
       <button type="button" class="advance" disabled>Waiting for Round ${team.round + 1}</button>`;
   } else if (s === "next-closed") {
     next = `<p class="round-wait-message" role="status">${nextRoundText(team.round + 1)}</p>
-      <p class="wait-note">Stay on this page. The button unlocks by itself, no need to refresh.</p>
+      <p class="wait-note">Stay on this page. The button unlocks by itself.</p>
       <button type="button" class="advance" disabled>Waiting for Round ${team.round + 1}</button>`;
   } else if (s === "next-open") {
     next = `<p class="round-wait-message" role="status">Round ${team.round + 1} is open.</p>
@@ -816,7 +816,7 @@ function closeFlashOverlay() {
 function updateFlashControls() {
   const timerOn = team.settings.flashTimer.enabled;
   const left = flashRemaining();
-  const locked = left > 0;
+  const running = left > 0;
   const timer = $("#flashTimer");
   timer.textContent = team.flashCompleted ? "Already read" : timerOn ? formatDuration(left) : "No timer";
   timer.classList.toggle("timer-off", !timerOn || team.flashCompleted);
@@ -824,19 +824,20 @@ function updateFlashControls() {
   $("#flashTimerNotice").textContent = team.flashCompleted
     ? "You've already finished this flash. Close it when you're ready."
     : timerOn
-      ? locked ? `This flash stays open for ${minutesLabel(flashMinutes())}, then closes for good.` : "Time's up. Taking you back to the round…"
+      ? running ? `Closes for good when the timer ends, or when you press Done reading. It cannot be opened again.` : "Time's up. Taking you back to the round…"
       : "Once you close the flash, it cannot be opened again.";
   const close = $("#flashClose");
-  close.hidden = timerOn && !team.flashCompleted;
-  close.disabled = locked || flashClosing;
+  close.hidden = false;
+  close.disabled = flashClosing;
   close.textContent = team.flashCompleted ? "Close" : "Done reading (closes for good)";
-  if (!locked && timerOn && !team.flashCompleted && !flashClosing && team.activeFlash && Date.now() >= flashRetryAt) closeFlash(true);
+  if (!running && timerOn && !team.flashCompleted && !flashClosing && team.activeFlash && Date.now() >= flashRetryAt) closeFlash(true);
 }
 
 async function closeFlash(automatic = false) {
   if (flashClosing) return;
   if (!automatic && !team.flashCompleted) {
-    const ok = await confirmAction("Finished reading?", "The flash closes for good. Your team cannot open it again.", "Close the flash");
+    const timeLeft = team.settings.flashTimer.enabled && flashRemaining() > 0 ? ` You still have <b>${formatDuration(flashRemaining())}</b> on the timer.` : "";
+    const ok = await confirmAction("Finished reading?", `The flash closes for good. Your team cannot open it again.${timeLeft}`, "Close the flash");
     if (!ok) return;
   }
   flashClosing = true;

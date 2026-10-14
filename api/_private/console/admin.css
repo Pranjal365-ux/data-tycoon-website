@@ -139,3 +139,8 @@ td.down { color: #8e211b; font-weight: 700; }
   .print-site { margin: 4mm 0 0; font-size: 9pt; color: #333; }
 }
 #tdBalance { width: 150px !important; }
+
+.control-block.full { grid-column: 1 / -1; border-right: 0; }
+.control-row label.check { display: inline-flex; align-items: center; gap: 5px; font-size: 14px; color: #292823; }
+#bonusToggle.on { background: #397451; border-color: #397451; color: #fff; }
+#bonusAmount { width: 130px !important; }

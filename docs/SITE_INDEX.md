@@ -57,7 +57,7 @@ Local development and production run the same code (`server.py` simply starts `a
 | Newsroom wire | `#wire` | Live status: round, next step, flash timer on/off, round wait on/off |
 | Step tabs | `#steps` | Four tabs (see 3.2) |
 | Page | `#page` | Next-step bulletin plus the current view |
-| Flash overlay | `#flash` | Red flash bar (FLASH N OF 04, hint, live `#flashTimer` countdown or TIMER OFF), pages with team watermark, `#flashTimerNotice` (SCREEN LOCKED / TIMER OFF), green DONE READING button (hidden while the five-minute lock runs, exactly as before), shield `#flashShield`, "You left the flash" card `#flashLeaveCard` |
+| Flash overlay | `#flash` | Red flash bar (FLASH N OF 04, hint, live `#flashTimer` countdown or TIMER OFF), pages with team watermark, `#flashTimerNotice` (SCREEN LOCKED / TIMER OFF), DONE READING button (always available; closing early ends the flash for good, with a confirmation), shield `#flashShield`, "You left the flash" card `#flashLeaveCard` |
 | Confirm dialog | `#confirmDialog` | Industry lock, submit, sign out |
 | Toasts | `#toasts` | Success, info and error messages |
 
@@ -110,7 +110,7 @@ Every action replaces the local state with the server's response, so the page ne
 
 ## 4. Game rules (server side, `api/_rules.py`)
 
-* Start balance ₹10,00,000. Budget each round = current balance, plus ₹2,50,000 in rounds 2 and 3.
+* Start balance ₹10,00,000. Budget each round = current balance. Organizers can turn on a bonus (amount and rounds 2 to 4 chosen in the console; off by default) that is added at the start of the chosen rounds.
 * Allocations must be whole rupees, at least ₹1,000 per parameter, and total exactly the budget.
 * Each round ranks the ten parameters; rank maps to base multipliers 2.7, 1.8, 1.5, 1.2, 1.0, 0.8, 0.7, 0.5, 0.3, 0.
 * Bands by share of budget: 2.7 is x0.8 up to 20%, full to 40%, x0.9 to 60%, x0.7 to 80%, x0.6 above; 1.8/1.5/1.2 are full to 40%, then x0.9, x0.7, x0.6; 1.0/0.8/0.7/0.5 are flat; 0.3 becomes -0.9 above 40%; 0 above 80% eliminates the team (payout 0).
@@ -139,7 +139,7 @@ All JSON responses are `no-store` unless noted. Bodies are limited to 64 KB. Dat
 | GET | `/api/team/state` | Full player state plus settings and server time; doubles as the heartbeat |
 | POST | `/api/team/industry` | `{industry}`; locks it, respects the 20-team cap |
 | POST | `/api/team/flash/open` | Starts the flash for the current round, once; refused before the round opens, while paused, or after it was read |
-| POST | `/api/team/flash/close` | Refused while the timer is running; marks the flash complete |
+| POST | `/api/team/flash/close` | Allowed at any time, also before the timer ends; marks the flash complete for good |
 | GET | `/api/team/flash/page/{n}?round=` | WebP page; only while the current round's flash is open and its time has not run out |
 | GET | `/api/team/dataset` | Current round's file; only after the flash is finished; marks it downloaded |
 | POST | `/api/team/submit` | `{round, allocations}`; validated and scored on the server, once per round |
@@ -152,7 +152,7 @@ All JSON responses are `no-store` unless noted. Bodies are limited to 64 KB. Dat
 |---|---|---|
 | POST | `/api/admin/login` | `{password}`; 8-hour token |
 | GET | `/api/admin/dashboard?kind=&team=&industry=` | Teams, alerts/activity (latest 150), alert count for 10 min, settings, seats |
-| PATCH | `/api/admin/settings` | `{flashTimer?, flashMinutes?, openRound?, schedule?: {round, minutes} or null, waitMinutes?, paused?, announcement?}` |
+| PATCH | `/api/admin/settings` | `{flashTimer?, flashMinutes?, openRound?, schedule?: {round, minutes} or null, waitMinutes?, paused?, announcement?, bonusEnabled?, bonusAmount?, bonusRounds?}` |
 | POST | `/api/admin/teams` | `{teams: [{teamId, pin?, industry?}]}`; returns created teams with PINs and skipped rows |
 | GET | `/api/admin/team?key=` | One team: progress, PIN, history, recent activity |
 | POST | `/api/admin/team-action` | `{teamKey, action, value?}`; actions: set-balance, set-pin, sign-out, reopen-flash, complete-flash, undo-submission, advance, set-round, set-industry, set-eliminated, notice, rename, delete |
@@ -174,7 +174,7 @@ Without the right console key every organizer route answers 404.
 |---|---|---|
 | `data_tycoon_teams` | normalized team name | Progress, balance, history, PIN hash (PBKDF2-SHA256, per-team salt and iteration count), session version |
 | `data_tycoon_activities` | ObjectId | Integrity alerts and game events; indexed by team, kind, industry; auto-deleted after 14 days |
-| `data_tycoon_settings` | `flash-timer`, `round-control`, `announcement` | Timer `{enabled, changedAt, minutes}`; rounds `{openRound, openedAt, scheduledRound, scheduledAt, waitMinutes, paused}`; `{text, at}` |
+| `data_tycoon_settings` | `flash-timer`, `round-control`, `announcement`, `round-bonus` | Timer `{enabled, changedAt, minutes}`; rounds `{openRound, openedAt, scheduledRound, scheduledAt, waitMinutes, paused}`; `{text, at}` |
 | `data_tycoon_industry_capacity` | industry | Seat counters used for atomic reservation and for display |
 | `data_tycoon_rate_limits` | ObjectId | Failed sign-in records; auto-deleted after 15 minutes |
 
